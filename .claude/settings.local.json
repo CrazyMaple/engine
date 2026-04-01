@@ -1,0 +1,39 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls:*)",
+      "Bash(wc:*)",
+      "Bash(find:*)",
+      "Bash(git -C /mnt/d/work/qingmu/server/qmserver log --oneline --graph --all)",
+      "Bash(dir:*)",
+      "Bash(findstr:*)",
+      "Bash(grep:*)",
+      "Bash(make:*)",
+      "Bash(./生成AttrType.bat)",
+      "Bash(git checkout:*)",
+      "Bash(go fmt:*)",
+      "Bash(go build:*)",
+      "Bash(git diff:*)",
+      "Bash(python3:*)",
+      "Bash(perl:*)",
+      "Read(//dev/**)",
+      "Read(//c/Users/Administrator/Desktop/**)",
+      "Read(//c/Users/Administrator/Desktop/测试用例/**)",
+      "Bash(bash bin/tool/makemsg.sh)",
+      "Bash(./client.exe -o genmsg -s \"http://10.100.30.70:9999/\" --msg-file \"../../code/static/msg/msg.xml\")",
+      "Read(//e/workspace/qm/**)",
+      "Read(//e/workspace/qm/qmserver/**)",
+      "Bash(/data/works/mindserver/qmmind/code/README.md:*)",
+      "Bash(go mod:*)",
+      "Bash(go test:*)",
+      "Bash(go vet:*)",
+      "Bash(cat router/*.go cluster/*.go grain/*.go pubsub/*.go remote/type_registry.go)",
+      "Bash(xargs sed:*)",
+      "Bash(echo \"exit: $?\")"
+    ],
+    "additionalDirectories": [
+      "e:\\workspace\\qm\\qmserver\\.claude\\docs\\output\\funcdesc",
+      "E:\\workspace\\qm\\qmserver\\.claude\\docs\\output\\funcdesc"
+    ]
+  }
+}

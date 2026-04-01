@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls /data/works/mnl/better/protoactor-go-dev/actor/*.go | grep -v _test.go)"
+    ]
+  }
+}
