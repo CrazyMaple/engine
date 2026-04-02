@@ -2,9 +2,10 @@ package remote
 
 import (
 	"encoding/json"
-	"fmt"
 	"reflect"
 	"sync"
+
+	engerr "engine/errors"
 )
 
 // TypeRegistry 消息类型注册表，支持跨节点消息的类型化反序列化
@@ -72,12 +73,12 @@ func (r *TypeRegistry) Deserialize(typeName string, data []byte) (interface{}, e
 	r.mu.RUnlock()
 
 	if !ok {
-		return nil, fmt.Errorf("unknown type: %s", typeName)
+		return nil, &engerr.CodecError{Op: "deserialize", TypeName: typeName, Cause: engerr.ErrNotFound}
 	}
 
 	ptr := reflect.New(t).Interface()
 	if err := json.Unmarshal(data, ptr); err != nil {
-		return nil, fmt.Errorf("unmarshal %s: %w", typeName, err)
+		return nil, &engerr.CodecError{Op: "deserialize", TypeName: typeName, Cause: err}
 	}
 	return ptr, nil
 }

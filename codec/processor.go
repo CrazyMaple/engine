@@ -1,7 +1,7 @@
 package codec
 
 import (
-	"errors"
+	"fmt"
 	"reflect"
 )
 
@@ -53,7 +53,7 @@ func (p *SimpleProcessor) Route(msg interface{}, agent interface{}) error {
 	msgType := reflect.TypeOf(msg)
 	handler, ok := p.msgHandlers[msgType]
 	if !ok {
-		return errors.New("handler not found for message type: " + msgType.String())
+		return fmt.Errorf("handler not found for message type: %s", msgType.String())
 	}
 
 	handlerValue := reflect.ValueOf(handler)

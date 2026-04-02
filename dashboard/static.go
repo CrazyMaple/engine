@@ -48,6 +48,12 @@ tr:hover td{background:#1a1a3e}
 <div class="card" id="clusterCard"><h3>集群状态</h3><div id="clusterInfo">加载中...</div></div>
 </div>
 
+<h2>运行时指标</h2>
+<div class="card"><div id="runtimeInfo">加载中...</div></div>
+
+<h2>Actor 拓扑</h2>
+<div class="card"><div id="actorTopology">加载中...</div></div>
+
 <h2>Actor 列表</h2>
 <div class="card"><div id="actorList">加载中...</div></div>
 
@@ -98,6 +104,38 @@ async function loadCluster(){
   document.getElementById('clusterInfo').innerHTML=html;
 }
 
+async function loadRuntime(){
+  const d=await fetchJSON('/api/runtime');
+  if(!d){document.getElementById('runtimeInfo').textContent='无法加载';return;}
+  document.getElementById('runtimeInfo').innerHTML=
+    '<div class="metric"><div class="label">Go 版本</div><div class="value">'+d.go_version+'</div></div>'+
+    '<div class="metric"><div class="label">Goroutine</div><div class="value">'+d.num_goroutine+'</div></div>'+
+    '<div class="metric"><div class="label">CPU 核心</div><div class="value">'+d.num_cpu+'</div></div>'+
+    '<div class="metric"><div class="label">堆内存</div><div class="value">'+d.heap_alloc_mb.toFixed(2)+' MB</div></div>'+
+    '<div class="metric"><div class="label">系统内存</div><div class="value">'+d.sys_mb.toFixed(2)+' MB</div></div>'+
+    '<div class="metric"><div class="label">栈内存</div><div class="value">'+d.stack_inuse_mb.toFixed(2)+' MB</div></div>'+
+    '<div class="metric"><div class="label">GC 次数</div><div class="value">'+d.num_gc+'</div></div>'+
+    '<div class="metric"><div class="label">最近 GC 暂停</div><div class="value">'+d.gc_pause_ms.toFixed(3)+' ms</div></div>'+
+    '<div class="metric"><div class="label">GC CPU</div><div class="value">'+d.gc_cpu_percent.toFixed(3)+' %</div></div>';
+}
+
+async function loadTopology(){
+  const d=await fetchJSON('/api/actors/topology');
+  if(!d){document.getElementById('actorTopology').textContent='无法加载';return;}
+  if(d.length===0){document.getElementById('actorTopology').textContent='无 Actor';return;}
+  function renderTree(nodes,depth){
+    let html='';
+    nodes.forEach(n=>{
+      const indent='&nbsp;'.repeat(depth*4);
+      const icon=n.children&&n.children.length>0?'&#9654; ':'&#9679; ';
+      html+='<div style="font-family:monospace;padding:2px 0;font-size:14px">'+indent+icon+n.pid+'</div>';
+      if(n.children)html+=renderTree(n.children,depth+1);
+    });
+    return html;
+  }
+  document.getElementById('actorTopology').innerHTML=renderTree(d,0);
+}
+
 async function loadActors(){
   const d=await fetchJSON('/api/actors');
   if(!d){document.getElementById('actorList').textContent='无法加载';return;}
@@ -141,7 +179,7 @@ async function loadMetrics(){
 
 function refreshAll(){
   showError('');
-  loadSystem();loadCluster();loadActors();loadHotActors();loadMetrics();
+  loadSystem();loadCluster();loadRuntime();loadTopology();loadActors();loadHotActors();loadMetrics();
 }
 
 refreshAll();

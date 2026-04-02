@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"engine/actor"
+	engerr "engine/errors"
 	"engine/log"
 	"engine/network"
 )
@@ -62,6 +63,9 @@ func (r *Remote) Start() {
 	}
 	r.server.Start()
 
+	// 自动注册远程进程代理，使远程 PID 可通过 ProcessRegistry 路由
+	r.system.ProcessRegistry.SetRemoteProcess(NewRemoteProcess(r))
+
 	r.started = true
 	log.Info("Remote started on %s", r.address)
 }
@@ -90,6 +94,14 @@ func (r *Remote) Send(target *actor.PID, sender *actor.PID, message interface{},
 	if endpoint == nil {
 		log.Error("Endpoint not found: %s", target.Address)
 		return
+	}
+
+	// 确保 sender PID 携带本地地址，使远端可以路由响应回来
+	if sender != nil && sender.Address == "" {
+		sender = &actor.PID{
+			Address: r.address,
+			Id:      sender.Id,
+		}
 	}
 
 	// 查找类型名称用于远端反序列化
@@ -130,13 +142,13 @@ func (a *remoteAgent) Run() {
 		// 如果启用签名验证，先验证并剥离签名
 		if a.remote.Signer != nil {
 			if len(data) < hmacSize {
-				log.Error("Message too short for signature verification")
+				log.Error("%v", &engerr.AuthError{Reason: "message too short for signature"})
 				continue
 			}
 			payload := data[:len(data)-hmacSize]
 			sig := data[len(data)-hmacSize:]
 			if !a.remote.Signer.Verify(payload, sig) {
-				log.Error("Message signature verification failed")
+				log.Error("%v", &engerr.AuthError{Reason: "HMAC signature mismatch"})
 				continue
 			}
 			data = payload
@@ -181,7 +193,9 @@ func (a *remoteAgent) resolveAndRoute(msg *RemoteMessage) {
 }
 
 func (a *remoteAgent) routeMessage(msg *RemoteMessage) {
-	process, ok := a.remote.system.ProcessRegistry.Get(msg.Target)
+	// 远程消息的 Target PID 可能携带远程地址，需要转为本地 PID 查找
+	localTarget := &actor.PID{Id: msg.Target.Id}
+	process, ok := a.remote.system.ProcessRegistry.Get(localTarget)
 	if !ok {
 		log.Error("Target actor not found: %s", msg.Target.Id)
 		return
@@ -189,8 +203,9 @@ func (a *remoteAgent) routeMessage(msg *RemoteMessage) {
 
 	switch msg.Type {
 	case MessageTypeUser:
-		process.SendUserMessage(msg.Target, msg.Message)
+		// 使用信封携带 sender 信息，使目标 Actor 可以通过 ctx.Respond() 回复
+		process.SendUserMessage(localTarget, actor.WrapEnvelope(msg.Message, msg.Sender))
 	case MessageTypeSystem:
-		process.SendSystemMessage(msg.Target, msg.Message)
+		process.SendSystemMessage(localTarget, msg.Message)
 	}
 }

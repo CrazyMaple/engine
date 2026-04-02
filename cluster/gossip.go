@@ -102,9 +102,20 @@ func (g *Gossiper) selectPeers() []*Member {
 		}
 	}
 
-	// 如果还没有已知 peer，尝试种子节点
+	// 如果没有已知存活 peer，回退到种子节点重新尝试连接
 	if len(peers) == 0 {
-		return nil
+		for _, seed := range g.cluster.config.SeedNodes {
+			if seed == g.cluster.config.Address {
+				continue
+			}
+			peers = append(peers, &Member{
+				Address: seed,
+				Status:  MemberAlive,
+			})
+		}
+		if len(peers) == 0 {
+			return nil
+		}
 	}
 
 	// Fisher-Yates 洗牌

@@ -1,9 +1,11 @@
 package gate
 
 import (
+	"net"
+	"time"
+
 	"engine/actor"
 	"engine/network"
-	"net"
 )
 
 // Gate 网关模块
@@ -22,12 +24,14 @@ type Gate struct {
 	LenMsgLen    int
 	LittleEndian bool
 
-	// WebSocket配置（预留）
-	WSAddr   string
-	CertFile string
-	KeyFile  string
+	// WebSocket配置
+	WSAddr      string
+	HTTPTimeout time.Duration
+	CertFile    string
+	KeyFile     string
 
 	tcpServer *network.TCPServer
+	wsServer  *network.WSServer
 	system    *actor.ActorSystem
 }
 
@@ -64,6 +68,20 @@ func (g *Gate) Start() {
 		}
 		g.tcpServer.Start()
 	}
+
+	if g.WSAddr != "" {
+		g.wsServer = &network.WSServer{
+			Addr:            g.WSAddr,
+			MaxConnNum:      g.MaxConnNum,
+			PendingWriteNum: g.PendingWriteNum,
+			MaxMsgLen:       g.MaxMsgLen,
+			HTTPTimeout:     g.HTTPTimeout,
+			CertFile:        g.CertFile,
+			KeyFile:         g.KeyFile,
+			NewAgent:        g.newWSAgent,
+		}
+		g.wsServer.Start()
+	}
 }
 
 // Close 关闭网关
@@ -71,9 +89,22 @@ func (g *Gate) Close() {
 	if g.tcpServer != nil {
 		g.tcpServer.Close()
 	}
+	if g.wsServer != nil {
+		g.wsServer.Close()
+	}
 }
 
 func (g *Gate) newAgent(conn *network.TCPConn) network.Agent {
+	agent := &Agent{
+		conn:      conn,
+		gate:      g,
+		system:    g.system,
+		closeChan: make(chan struct{}),
+	}
+	return agent
+}
+
+func (g *Gate) newWSAgent(conn *network.WSConn) network.Agent {
 	agent := &Agent{
 		conn:      conn,
 		gate:      g,

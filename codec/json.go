@@ -2,8 +2,9 @@ package codec
 
 import (
 	"encoding/json"
-	"errors"
 	"reflect"
+
+	engerr "engine/errors"
 )
 
 // JSONCodec JSON编解码器
@@ -43,15 +44,17 @@ func (c *JSONCodec) Decode(data []byte) (interface{}, error) {
 
 	msgType, ok := m["type"].(string)
 	if !ok {
-		return nil, errors.New("message type not found")
+		return nil, &engerr.CodecError{Op: "decode", Cause: engerr.ErrNotFound}
 	}
 
 	typ, ok := c.msgInfo[msgType]
 	if !ok {
-		return nil, errors.New("message type not registered: " + msgType)
+		return nil, &engerr.CodecError{Op: "decode", TypeName: msgType, Cause: engerr.ErrNotFound}
 	}
 
 	msg := reflect.New(typ.Elem()).Interface()
-	err = json.Unmarshal(data, msg)
-	return msg, err
+	if err = json.Unmarshal(data, msg); err != nil {
+		return nil, &engerr.CodecError{Op: "decode", TypeName: msgType, Cause: err}
+	}
+	return msg, nil
 }

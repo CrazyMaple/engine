@@ -91,6 +91,66 @@ func AlwaysRestartDecider(reason interface{}) Directive {
 	return RestartDirective
 }
 
+// AllForOneStrategy 全体监管策略
+// 当一个子 Actor 失败时，根据决策函数的指令对所有子 Actor 执行相同操作
+type AllForOneStrategy struct {
+	maxRetries     int
+	withinDuration time.Duration
+	decider        DeciderFunc
+}
+
+// NewAllForOneStrategy 创建全体监管策略
+func NewAllForOneStrategy(maxRetries int, withinDuration time.Duration, decider DeciderFunc) SupervisorStrategy {
+	return &AllForOneStrategy{
+		maxRetries:     maxRetries,
+		withinDuration: withinDuration,
+		decider:        decider,
+	}
+}
+
+func (s *AllForOneStrategy) HandleFailure(supervisor Supervisor, child *PID, restartStats *RestartStatistics, reason interface{}) Directive {
+	directive := s.decider(reason)
+
+	switch directive {
+	case RestartDirective:
+		if s.shouldStop(restartStats) {
+			return StopDirective
+		}
+		restartStats.FailureCount++
+		restartStats.LastFailureTime = time.Now()
+		// 重启所有子 Actor，而非仅失败的那个
+		supervisor.RestartChildren(supervisor.Children()...)
+		return ResumeDirective // 已在此处处理，不需要 actorCell 再执行
+
+	case StopDirective:
+		supervisor.StopChildren(supervisor.Children()...)
+		return ResumeDirective
+
+	case EscalateDirective:
+		return EscalateDirective
+
+	default:
+		// ResumeDirective — 仅恢复失败的子 Actor
+		return directive
+	}
+}
+
+func (s *AllForOneStrategy) shouldStop(restartStats *RestartStatistics) bool {
+	if s.maxRetries == 0 {
+		return false
+	}
+
+	if s.withinDuration == 0 {
+		return restartStats.FailureCount >= s.maxRetries
+	}
+
+	if time.Since(restartStats.LastFailureTime) > s.withinDuration {
+		restartStats.FailureCount = 0
+	}
+
+	return restartStats.FailureCount >= s.maxRetries
+}
+
 // StoppingStrategy 停止策略
 var StoppingStrategy = NewOneForOneStrategy(0, 0, func(reason interface{}) Directive {
 	return StopDirective

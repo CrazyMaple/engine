@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"engine/actor"
+	engerr "engine/errors"
 	"engine/log"
 	"engine/remote"
 )
@@ -109,10 +110,14 @@ func (c *Cluster) Start() error {
 			}
 			c.updateHashRing()
 		}); err != nil {
-			log.Error("Failed to start cluster provider: %v", err)
+			log.Error("Failed to start cluster provider: %v", &engerr.ClusterError{
+				Op: "provider.start", Node: c.self.Address, Cause: err,
+			})
 			c.connectToSeeds() // 回退到种子节点
 		} else if err := c.config.Provider.Register(); err != nil {
-			log.Error("Failed to register with cluster provider: %v", err)
+			log.Error("Failed to register with cluster provider: %v", &engerr.ClusterError{
+				Op: "provider.register", Node: c.self.Address, Cause: err,
+			})
 		}
 	} else {
 		c.connectToSeeds()
@@ -194,37 +199,55 @@ func (c *Cluster) Config() *ClusterConfig {
 	return c.config
 }
 
-// connectToSeeds 连接种子节点
+// connectToSeeds 连接种子节点，异步重试直到成功或集群停止
 func (c *Cluster) connectToSeeds() {
 	if len(c.config.SeedNodes) == 0 {
 		return
 	}
 
-	state := c.gossiper.GetState()
+	// 在后台重试连接种子节点，间隔与 GossipInterval 一致
+	go func() {
+		maxRetries := 30 // 最多重试 30 次
+		for i := 0; i < maxRetries; i++ {
+			// 检查集群是否已停止
+			c.mu.RLock()
+			started := c.started
+			c.mu.RUnlock()
+			if !started && i > 0 {
+				return
+			}
 
-	for _, seed := range c.config.SeedNodes {
-		if seed == c.config.Address {
-			continue // 跳过自己
+			// 检查是否已经有其他成员（说明已收敛）
+			members := c.memberList.GetMembers()
+			otherCount := 0
+			for _, m := range members {
+				if m.Id != c.self.Id {
+					otherCount++
+				}
+			}
+			if otherCount > 0 {
+				return // 已经发现其他节点，不再重试
+			}
+
+			state := c.gossiper.GetState()
+			for _, seed := range c.config.SeedNodes {
+				if seed == c.config.Address {
+					continue
+				}
+				target := actor.NewPID(seed, "cluster/gossip")
+				c.remote.Send(target, c.gossipPID, &GossipRequest{
+					ClusterName: c.config.ClusterName,
+					State:       state,
+				}, 0)
+			}
+
+			if i == 0 {
+				log.Info("Connecting to seed nodes: %v", c.config.SeedNodes)
+			}
+
+			time.Sleep(c.config.GossipInterval)
 		}
-
-		// 先将种子节点作为临时成员（gossip 会确认）
-		seedMember := &MemberGossipState{
-			Address: seed,
-			Id:      generateNodeId(seed),
-			Status:  MemberAlive,
-			Seq:     0,
-		}
-		c.memberList.UpdateMember(seedMember)
-
-		// 发送 Gossip 请求到种子节点
-		target := actor.NewPID(seed, "cluster/gossip")
-		c.remote.Send(target, c.gossipPID, &GossipRequest{
-			ClusterName: c.config.ClusterName,
-			State:       state,
-		}, 0)
-
-		log.Info("Connecting to seed node: %s", seed)
-	}
+	}()
 }
 
 // updateHashRing 更新一致性哈希环

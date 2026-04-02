@@ -102,4 +102,6 @@ func (d *Dashboard) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/metrics", h.handleMetrics)
 	mux.HandleFunc("/api/metrics/prometheus", h.handleMetricsPrometheus)
 	mux.HandleFunc("/api/hotactors", h.handleHotActors)
+	mux.HandleFunc("/api/runtime", h.handleRuntime)
+	mux.HandleFunc("/api/actors/topology", h.handleActorTopology)
 }

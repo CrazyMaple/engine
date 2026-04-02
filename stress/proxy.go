@@ -1,7 +1,6 @@
 package stress
 
 import (
-	"io"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -160,5 +159,4 @@ func (p *Proxy) relay(dst, src net.Conn) {
 			return
 		}
 	}
-	_ = io.Discard // keep io import
 }

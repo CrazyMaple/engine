@@ -3,6 +3,7 @@ package dashboard
 import (
 	"encoding/json"
 	"net/http"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -274,6 +275,116 @@ func (h *handlers) handleHotActors(w http.ResponseWriter, r *http.Request) {
 
 	stats := h.config.HotTracker.TopN(n)
 	writeJSON(w, stats)
+}
+
+// ---- GET /api/runtime ----
+
+type runtimeInfo struct {
+	GoVersion    string `json:"go_version"`
+	NumGoroutine int    `json:"num_goroutine"`
+	NumCPU       int    `json:"num_cpu"`
+	// 内存
+	AllocMB      float64 `json:"alloc_mb"`
+	TotalAllocMB float64 `json:"total_alloc_mb"`
+	SysMB        float64 `json:"sys_mb"`
+	HeapAllocMB  float64 `json:"heap_alloc_mb"`
+	HeapInuseMB  float64 `json:"heap_inuse_mb"`
+	StackInuseMB float64 `json:"stack_inuse_mb"`
+	// GC
+	NumGC        uint32  `json:"num_gc"`
+	GCPauseMs    float64 `json:"gc_pause_ms"`     // 最近一次 GC 暂停时间
+	GCPauseTotMs float64 `json:"gc_pause_tot_ms"` // GC 暂停总时间
+	GCCPUPercent float64 `json:"gc_cpu_percent"`
+}
+
+func (h *handlers) handleRuntime(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	var mem runtime.MemStats
+	runtime.ReadMemStats(&mem)
+
+	toMB := func(b uint64) float64 { return float64(b) / 1024 / 1024 }
+
+	var lastPause float64
+	if mem.NumGC > 0 {
+		lastPause = float64(mem.PauseNs[(mem.NumGC+255)%256]) / 1e6
+	}
+
+	info := runtimeInfo{
+		GoVersion:    runtime.Version(),
+		NumGoroutine: runtime.NumGoroutine(),
+		NumCPU:       runtime.NumCPU(),
+		AllocMB:      toMB(mem.Alloc),
+		TotalAllocMB: toMB(mem.TotalAlloc),
+		SysMB:        toMB(mem.Sys),
+		HeapAllocMB:  toMB(mem.HeapAlloc),
+		HeapInuseMB:  toMB(mem.HeapInuse),
+		StackInuseMB: toMB(mem.StackInuse),
+		NumGC:        mem.NumGC,
+		GCPauseMs:    lastPause,
+		GCPauseTotMs: float64(mem.PauseTotalNs) / 1e6,
+		GCCPUPercent: mem.GCCPUFraction * 100,
+	}
+	writeJSON(w, info)
+}
+
+// ---- GET /api/actors/topology ----
+
+type actorNode struct {
+	PID      string       `json:"pid"`
+	Children []*actorNode `json:"children,omitempty"`
+}
+
+func (h *handlers) handleActorTopology(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	// 收集所有 actor 及其子节点
+	ids := h.config.System.ProcessRegistry.GetAllIDs()
+	childrenMap := make(map[string][]string)  // pid -> children ids
+	hasParent := make(map[string]bool)
+
+	for _, id := range ids {
+		proc, ok := h.config.System.ProcessRegistry.GetByID(id)
+		if !ok {
+			continue
+		}
+		if cell, ok := proc.(interface{ Children() []*actor.PID }); ok {
+			children := cell.Children()
+			for _, c := range children {
+				childrenMap[id] = append(childrenMap[id], c.Id)
+				hasParent[c.Id] = true
+			}
+		}
+	}
+
+	// 构建树：根节点是没有父节点的 actor
+	var buildNode func(id string) *actorNode
+	buildNode = func(id string) *actorNode {
+		node := &actorNode{PID: id}
+		if kids, ok := childrenMap[id]; ok {
+			sort.Strings(kids)
+			for _, kid := range kids {
+				node.Children = append(node.Children, buildNode(kid))
+			}
+		}
+		return node
+	}
+
+	sort.Strings(ids)
+	roots := make([]*actorNode, 0)
+	for _, id := range ids {
+		if !hasParent[id] {
+			roots = append(roots, buildNode(id))
+		}
+	}
+
+	writeJSON(w, roots)
 }
 
 // ---- GET / (Dashboard 首页) ----
