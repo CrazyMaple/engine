@@ -65,6 +65,11 @@ func (rc *RootContext) Send(pid *PID, message interface{}) {
 	sendMessage(pid, message, nil)
 }
 
+// SendWithTrace 发送消息并附加链路追踪 ID
+func (rc *RootContext) SendWithTrace(pid *PID, message interface{}, traceID string) {
+	sendMessageWithTrace(pid, message, nil, traceID)
+}
+
 // Request 请求消息
 func (rc *RootContext) Request(pid *PID, message interface{}) {
 	sendMessage(pid, message, nil)
@@ -94,6 +99,10 @@ func DefaultSystem() *ActorSystem {
 // 辅助函数
 
 func sendMessage(pid *PID, message interface{}, sender *PID) {
+	sendMessageWithTrace(pid, message, sender, "")
+}
+
+func sendMessageWithTrace(pid *PID, message interface{}, sender *PID, traceID string) {
 	if pid == nil {
 		return
 	}
@@ -108,8 +117,8 @@ func sendMessage(pid *PID, message interface{}, sender *PID) {
 		return
 	}
 
-	// 使用信封携带 sender 信息
-	process.SendUserMessage(pid, WrapEnvelope(message, sender))
+	// 使用信封携带 sender 和 traceID 信息
+	process.SendUserMessage(pid, WrapEnvelopeWithTrace(message, sender, traceID))
 }
 
 func sendSystemMessage(pid *PID, message interface{}) {

@@ -4,11 +4,12 @@ import "engine/actor"
 
 // RemoteMessage 远程消息封装
 type RemoteMessage struct {
-	Target   *actor.PID  // 目标Actor
-	Sender   *actor.PID  // 发送者
-	Message  interface{} // 消息内容
-	Type     MessageType // 消息类型
-	TypeName string      // 消息类型名称，用于反序列化
+	Target          *actor.PID  `json:"target"`                      // 目标Actor
+	Sender          *actor.PID  `json:"sender"`                      // 发送者
+	Message         interface{} `json:"message"`                     // 消息内容
+	Type            MessageType `json:"type"`                        // 消息类型
+	TypeName        string      `json:"type_name"`                   // 消息类型名称，用于反序列化
+	ProtocolVersion int         `json:"protocol_version,omitempty"`  // 协议版本号
 }
 
 // MessageType 消息类型

@@ -2,10 +2,11 @@ package actor
 
 import "time"
 
-// MessageEnvelope 消息信封，携带发送者信息
+// MessageEnvelope 消息信封，携带发送者信息和追踪 ID
 type MessageEnvelope struct {
 	Message interface{}
 	Sender  *PID
+	TraceID string // 可选的链路追踪 ID，为空时零开销
 }
 
 // WrapEnvelope 包装消息为信封（如果有 sender），使用对象池减少 GC
@@ -22,6 +23,24 @@ func UnwrapEnvelope(message interface{}) (interface{}, *PID) {
 		return env.Message, env.Sender
 	}
 	return message, nil
+}
+
+// UnwrapEnvelopeFull 解包消息信封，返回消息、发送者和 TraceID
+func UnwrapEnvelopeFull(message interface{}) (interface{}, *PID, string) {
+	if env, ok := message.(*MessageEnvelope); ok {
+		return env.Message, env.Sender, env.TraceID
+	}
+	return message, nil, ""
+}
+
+// WrapEnvelopeWithTrace 包装消息为信封并附加 TraceID
+func WrapEnvelopeWithTrace(message interface{}, sender *PID, traceID string) interface{} {
+	if sender == nil && traceID == "" {
+		return message
+	}
+	env := AcquireEnvelope(message, sender)
+	env.TraceID = traceID
+	return env
 }
 
 // 生命周期消息

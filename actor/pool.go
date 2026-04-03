@@ -23,6 +23,7 @@ func ReleaseEnvelope(env *MessageEnvelope) {
 	}
 	env.Message = nil
 	env.Sender = nil
+	env.TraceID = ""
 	envelopePool.Put(env)
 }
 

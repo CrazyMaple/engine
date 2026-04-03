@@ -8,6 +8,7 @@ import (
 
 	"engine/actor"
 	"engine/cluster"
+	"engine/config"
 	"engine/log"
 	"engine/middleware"
 )
@@ -24,6 +25,16 @@ type Config struct {
 	Metrics *middleware.Metrics
 	// HotTracker 热点 Actor 追踪器（可选）
 	HotTracker *HotActorTracker
+	// TraceStore 追踪记录存储（可选，为 nil 则不支持追踪查询）
+	TraceStore *middleware.TraceStore
+	// MetricsRegistry 指标注册中心（可选，提供更完整的 Prometheus 指标）
+	MetricsRegistry *middleware.MetricsRegistry
+	// MetricsHistory 消息流量历史（可选，提供趋势图数据）
+	MetricsHistory *MetricsHistory
+	// ConfigManager 配置管理器（可选，支持在线查看和重载配置）
+	ConfigManager *config.Manager
+	// AuditLog 审计日志（可选）
+	AuditLog *AuditLog
 }
 
 // Dashboard Web 管理面板
@@ -104,4 +115,12 @@ func (d *Dashboard) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/hotactors", h.handleHotActors)
 	mux.HandleFunc("/api/runtime", h.handleRuntime)
 	mux.HandleFunc("/api/actors/topology", h.handleActorTopology)
+	mux.HandleFunc("/api/traces", h.handleTraces)
+	mux.HandleFunc("/api/metrics/history", h.handleMetricsHistory)
+	mux.HandleFunc("/api/cluster/graph", h.handleClusterGraph)
+	mux.HandleFunc("/api/actors/flamegraph", h.handleFlameGraph)
+	mux.HandleFunc("/api/config", h.handleConfig)
+	mux.HandleFunc("/api/config/reload", h.handleConfigReload)
+	mux.HandleFunc("/api/audit", h.handleAuditLog)
+	mux.HandleFunc("/api/log/level", h.handleLogLevel)
 }

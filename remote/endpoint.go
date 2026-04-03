@@ -272,6 +272,14 @@ func (em *EndpointManager) GetEndpoint(address string) *Endpoint {
 	return ep
 }
 
+// ConnectionCount 返回当前远程连接数
+func (em *EndpointManager) ConnectionCount() int {
+	em.mu.RLock()
+	n := len(em.endpoints)
+	em.mu.RUnlock()
+	return n
+}
+
 // Stop 停止所有端点
 func (em *EndpointManager) Stop() {
 	em.mu.Lock()

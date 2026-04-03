@@ -71,6 +71,18 @@ go run example/remote_example.go client   # 节点2
 - **`timer/`** — 定时器系统。
 - **`codegen/`** — 从 `//msggen:message` 注解的 Go struct 生成注册代码和 TypeScript 类型。
 - **`better/`** — 参考实现（vendored Leaf 和 ProtoActor 源码），不直接编译进项目。
+- **`errors/`** — 引擎级统一错误类型（ConnectError/TimeoutError/AuthError/ClusterError/CodecError）。
+- **`cluster/provider/`** — 外部服务发现（Consul、etcd、K8s Provider）。
+
+## better/ 目录规则
+
+`better/` 为参考实现目录（vendored Leaf 和 ProtoActor 源码），遵循以下规则：
+
+1. **不参与项目编译**：不直接编译进引擎产物，仅作为设计参考和对比基准
+2. **不参与需求审核**：审核功能完成度时，不将 `better/` 下的代码计入已完成项
+3. **不参与测试统计**：`better/` 下的测试失败不影响引擎整体测试状态评估
+4. **不计入代码量**：统计项目代码量时排除 `better/` 目录
+5. **只读参考**：可查阅实现思路，但新代码应在引擎对应模块中独立实现，不得直接复制或 import
 
 ## Key Design Patterns
 

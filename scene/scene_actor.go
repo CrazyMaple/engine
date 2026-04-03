@@ -13,8 +13,12 @@ type SceneConfig struct {
 
 // SceneActor 场景 Actor，管理空间实体和 AOI
 type SceneActor struct {
-	config SceneConfig
-	grid   *Grid
+	config         SceneConfig
+	grid           *Grid
+	manager        *SceneManager           // 可选，用于跨场景转移时查找目标场景
+	transferring   map[string]*transferState // 正在转移中的实体
+	adjacents      map[string]*adjacentInfo  // 相邻场景
+	borderEntities map[borderKey]bool        // 处于边界区域的实体
 }
 
 // NewSceneActor 创建场景 Actor 生产函数
@@ -28,15 +32,24 @@ func (s *SceneActor) Receive(ctx actor.Context) {
 	switch msg := ctx.Message().(type) {
 	case *actor.Started:
 		s.grid = NewGrid(s.config.GridConfig)
+		s.transferring = make(map[string]*transferState)
+		s.adjacents = make(map[string]*adjacentInfo)
+		s.borderEntities = make(map[borderKey]bool)
 		log.Info("[scene] %s started", s.config.SceneID)
 
 	case *EnterScene:
 		s.handleEnter(ctx, msg)
 
 	case *LeaveScene:
+		if s.stashOrProcess(msg.EntityID, msg) {
+			return
+		}
 		s.handleLeave(ctx, msg)
 
 	case *MoveInScene:
+		if s.stashOrProcess(msg.EntityID, msg) {
+			return
+		}
 		s.handleMove(ctx, msg)
 
 	case *BroadcastToScene:
@@ -47,6 +60,26 @@ func (s *SceneActor) Receive(ctx actor.Context) {
 
 	case *GetSceneInfo:
 		s.handleGetInfo(ctx)
+
+	// 转移相关消息
+	case *TransferEntity:
+		s.handleTransfer(ctx, msg)
+
+	case *TransferIn:
+		s.handleTransferIn(ctx, msg)
+
+	case *TransferResult:
+		s.handleTransferResult(ctx, msg)
+
+	// 跨场景 AOI 边界
+	case *RegisterAdjacentScene:
+		s.handleRegisterAdjacent(ctx, msg)
+
+	case *UnregisterAdjacentScene:
+		s.handleUnregisterAdjacent(msg)
+
+	case *BorderEntityUpdate:
+		s.handleBorderEntityUpdate(ctx, msg)
 
 	case *actor.Stopping:
 		log.Info("[scene] %s stopping, entities=%d", s.config.SceneID, s.grid.EntityCount())
@@ -151,6 +184,9 @@ func (s *SceneActor) handleMove(ctx actor.Context, msg *MoveInScene) {
 			})
 		}
 	}
+
+	// 检查边界区域，通知相邻场景
+	s.checkBorderZone(ctx, msg.EntityID, msg.X, msg.Y)
 }
 
 func (s *SceneActor) handleBroadcastScene(ctx actor.Context, msg *BroadcastToScene) {

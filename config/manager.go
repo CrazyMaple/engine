@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"sync"
 	"time"
@@ -113,6 +114,37 @@ func (m *Manager) Get(filename string) *ConfigEntry {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.entries[filename]
+}
+
+// ListEntries 返回所有已注册的配置条目
+func (m *Manager) ListEntries() []*ConfigEntry {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	entries := make([]*ConfigEntry, 0, len(m.entries))
+	for _, e := range m.entries {
+		entries = append(entries, e)
+	}
+	return entries
+}
+
+// ReloadEntry 重新加载指定配置文件
+func (m *Manager) ReloadEntry(filename string) error {
+	m.mu.RLock()
+	e, ok := m.entries[filename]
+	m.mu.RUnlock()
+
+	if !ok {
+		return fmt.Errorf("config not registered: %s", filename)
+	}
+
+	if err := m.loadEntry(e); err != nil {
+		return err
+	}
+	if e.OnReload != nil {
+		e.OnReload()
+	}
+	return nil
 }
 
 // StartWatch 启动文件监控，定期检查文件变更并自动重载

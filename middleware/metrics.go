@@ -17,6 +17,7 @@ type Metrics struct {
 	mu           sync.RWMutex
 	msgCount     map[string]*int64 // 消息类型 → 计数
 	totalLatency map[string]*int64 // 消息类型 → 累计纳秒
+	registry     *MetricsRegistry  // 可选的指标注册中心
 }
 
 // MetricsSnapshot 指标快照
@@ -56,10 +57,29 @@ func (m *Metrics) getCounters(typeName string) (*int64, *int64) {
 	return m.msgCount[typeName], m.totalLatency[typeName]
 }
 
+// SetRegistry 设置指标注册中心，record 时同步写入 registry
+func (m *Metrics) SetRegistry(r *MetricsRegistry) {
+	m.mu.Lock()
+	m.registry = r
+	m.mu.Unlock()
+}
+
 func (m *Metrics) record(typeName string, elapsed time.Duration) {
 	count, latency := m.getCounters(typeName)
 	atomic.AddInt64(count, 1)
 	atomic.AddInt64(latency, int64(elapsed))
+
+	// 同步写入 registry
+	m.mu.RLock()
+	reg := m.registry
+	m.mu.RUnlock()
+	if reg != nil {
+		labels := map[string]string{"type": typeName}
+		reg.IncCounter("engine_actor_message_total",
+			"Total messages processed by type", labels, 1)
+		reg.IncCounter("engine_actor_message_duration_nanoseconds",
+			"Total processing duration in nanoseconds by type", labels, int64(elapsed))
+	}
 }
 
 // Snapshot 返回当前指标快照

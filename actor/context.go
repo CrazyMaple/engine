@@ -21,6 +21,8 @@ type InfoContext interface {
 // MessageContext 提供消息访问
 type MessageContext interface {
 	Message() interface{}
+	// TraceID 返回当前消息的链路追踪 ID（可能为空）
+	TraceID() string
 }
 
 // SenderContext 提供消息发送能力

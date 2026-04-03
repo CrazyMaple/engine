@@ -21,6 +21,7 @@ type actorCell struct {
 	mailbox            Mailbox
 	message            interface{}
 	sender             *PID
+	traceID            string // 当前消息的链路追踪 ID
 	stopping           bool
 	restarting         bool
 	restartStats       *RestartStatistics
@@ -69,14 +70,18 @@ func (cell *actorCell) Message() interface{} {
 	return cell.message
 }
 
+func (cell *actorCell) TraceID() string {
+	return cell.traceID
+}
+
 // SenderContext接口实现
 
 func (cell *actorCell) Send(pid *PID, message interface{}) {
-	sendMessage(pid, message, cell.self)
+	sendMessageWithTrace(pid, message, cell.self, cell.traceID)
 }
 
 func (cell *actorCell) Request(pid *PID, message interface{}) {
-	sendMessage(pid, message, cell.self)
+	sendMessageWithTrace(pid, message, cell.self, cell.traceID)
 }
 
 func (cell *actorCell) RequestFuture(pid *PID, message interface{}, timeout time.Duration) *Future {
@@ -181,10 +186,11 @@ func (cell *actorCell) processMessage(message interface{}, isSystem bool) {
 		}
 	}()
 
-	// 解包消息信封，提取 sender
-	actualMsg, sender := UnwrapEnvelope(message)
+	// 解包消息信封，提取 sender 和 traceID
+	actualMsg, sender, traceID := UnwrapEnvelopeFull(message)
 	cell.message = actualMsg
 	cell.sender = sender
+	cell.traceID = traceID
 
 	// 处理完成后归还信封到池中
 	if env, ok := message.(*MessageEnvelope); ok {
