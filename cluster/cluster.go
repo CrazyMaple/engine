@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"engine/actor"
+	"engine/cluster/federation"
 	engerr "engine/errors"
 	"engine/log"
 	"engine/remote"
@@ -21,6 +22,7 @@ type Cluster struct {
 	hashRing   *ConsistentHash
 	self       *Member
 	gossipPID  *actor.PID
+	splitBrain *SplitBrainDetector
 	started    bool
 	mu         sync.RWMutex
 }
@@ -123,6 +125,12 @@ func (c *Cluster) Start() error {
 		c.connectToSeeds()
 	}
 
+	// 启动脑裂检测器（如果配置了）
+	if c.config.SplitBrain != nil && c.config.SplitBrain.Enabled {
+		c.splitBrain = NewSplitBrainDetector(c, c.config.SplitBrain)
+		c.splitBrain.Start()
+	}
+
 	c.started = true
 	log.Info("Cluster started: %s, node: %s (%s), kinds: %v",
 		c.config.ClusterName, c.self.Address, c.self.Id, c.config.Kinds)
@@ -152,6 +160,12 @@ func (c *Cluster) Stop() {
 	if c.config.Provider != nil {
 		c.config.Provider.Deregister()
 		c.config.Provider.Stop()
+	}
+
+	// 停止脑裂检测器
+	if c.splitBrain != nil {
+		c.splitBrain.Stop()
+		c.splitBrain = nil
 	}
 
 	// 停止 Gossip
@@ -254,6 +268,18 @@ func (c *Cluster) connectToSeeds() {
 func (c *Cluster) updateHashRing() {
 	members := c.memberList.GetMembers()
 	c.hashRing.UpdateMembers(members)
+}
+
+// StartFederation 初始化并启动跨集群联邦网关
+func (c *Cluster) StartFederation(cfg *federation.FederationConfig) (*federation.Gateway, error) {
+	if !c.started {
+		return nil, fmt.Errorf("cluster must be started before federation")
+	}
+	gw := federation.NewGateway(c.system, c.remote, cfg)
+	if err := gw.Start(); err != nil {
+		return nil, fmt.Errorf("start federation gateway: %w", err)
+	}
+	return gw, nil
 }
 
 // generateNodeId 基于地址和时间生成节点 ID

@@ -34,6 +34,9 @@ type ClusterConfig struct {
 	// Provider 可选的集群服务发现提供者（Consul、etcd、K8s 等）
 	// 如果设置则使用 Provider 发现成员，否则使用 SeedNodes + Gossip
 	Provider ClusterProvider
+
+	// SplitBrain 脑裂检测配置（nil 表示不启用）
+	SplitBrain *SplitBrainConfig
 }
 
 // DefaultClusterConfig 创建默认配置
@@ -83,5 +86,11 @@ func (c *ClusterConfig) WithHeartbeatTimeout(d time.Duration) *ClusterConfig {
 // WithProvider 设置集群服务发现提供者
 func (c *ClusterConfig) WithProvider(provider ClusterProvider) *ClusterConfig {
 	c.Provider = provider
+	return c
+}
+
+// WithSplitBrain 设置脑裂检测配置
+func (c *ClusterConfig) WithSplitBrain(cfg *SplitBrainConfig) *ClusterConfig {
+	c.SplitBrain = cfg
 	return c
 }

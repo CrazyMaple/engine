@@ -2,6 +2,7 @@ package gate
 
 import (
 	"encoding/json"
+	"fmt"
 	"net"
 	"sync/atomic"
 	"time"
@@ -35,6 +36,9 @@ type Gate struct {
 
 	// 版本协商（nil 表示不启用握手）
 	VersionNegotiator *VersionNegotiator
+
+	// Security 安全过滤器链（nil 表示不启用安全检查）
+	Security *SecurityChain
 
 	tcpServer *network.TCPServer
 	wsServer  *network.WSServer
@@ -132,6 +136,7 @@ func (g *Gate) newAgent(conn *network.TCPConn) network.Agent {
 		system:    g.system,
 		closeChan: make(chan struct{}),
 	}
+	agent.initSecurity()
 	return agent
 }
 
@@ -143,7 +148,28 @@ func (g *Gate) newWSAgent(conn *network.WSConn) network.Agent {
 		system:    g.system,
 		closeChan: make(chan struct{}),
 	}
+	agent.initSecurity()
 	return agent
+}
+
+// initSecurity 初始化安全上下文并执行连接检查
+func (a *Agent) initSecurity() {
+	if a.gate.Security == nil {
+		return
+	}
+	remoteAddr := ""
+	if addr := a.conn.RemoteAddr(); addr != nil {
+		remoteAddr = addr.String()
+	}
+	a.secCtx = &SecurityContext{
+		RemoteAddr:  remoteAddr,
+		ConnID:      fmt.Sprintf("%p", a.conn),
+		ConnectedAt: time.Now(),
+	}
+	if err := a.gate.Security.ProcessConnect(a.secCtx); err != nil {
+		log.Warn("Security rejected connection from %s: %v", remoteAddr, err)
+		a.conn.Close()
+	}
 }
 
 // Agent 玩家代理
@@ -156,6 +182,7 @@ type Agent struct {
 	closeChan       chan struct{}
 	protocolVersion int    // 协商后的协议版本（默认 1）
 	clientSDK       string // 客户端 SDK 标识
+	secCtx          *SecurityContext // 安全上下文
 }
 
 // Run 运行代理
@@ -176,6 +203,18 @@ func (a *Agent) Run() {
 			continue
 		}
 		firstMessage = false
+
+		// 安全过滤器链检查
+		if a.secCtx != nil && a.gate.Security != nil {
+			result := a.gate.Security.ProcessMessage(a.secCtx, data)
+			if result == FilterKick {
+				log.Warn("Security kicked connection %s", a.secCtx.ConnID)
+				break
+			}
+			if result == FilterReject {
+				continue // 丢弃消息，继续处理下一条
+			}
+		}
 
 		if a.gate.Processor != nil {
 			msg, err := a.gate.Processor.Unmarshal(data)
@@ -229,6 +268,10 @@ func (a *Agent) ClientSDK() string {
 // OnClose 连接关闭回调
 func (a *Agent) OnClose() {
 	atomic.AddInt64(&a.gate.connCount, -1)
+	// 通知安全过滤器连接断开
+	if a.secCtx != nil && a.gate.Security != nil {
+		a.gate.Security.ProcessDisconnect(a.secCtx)
+	}
 	close(a.closeChan)
 	if a.actorPID != nil {
 		a.system.Root.Stop(a.actorPID)

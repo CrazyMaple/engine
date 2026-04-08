@@ -607,7 +607,7 @@ func (h *handlers) handleConfigReload(w http.ResponseWriter, r *http.Request) {
 
 	// 记录审计日志
 	if h.config.AuditLog != nil {
-		h.config.AuditLog.Record("config_reload", req.Filename, "dashboard")
+		h.config.AuditLog.Record("config_reload", req.Filename, "dashboard", extractOperator(r), r.RemoteAddr)
 	}
 
 	writeJSON(w, map[string]string{"status": "ok", "filename": req.Filename})
@@ -658,7 +658,7 @@ func (h *handlers) handleLogLevel(w http.ResponseWriter, r *http.Request) {
 
 		// 记录审计日志
 		if h.config.AuditLog != nil {
-			h.config.AuditLog.Record("log_level_change", req.Level, "dashboard")
+			h.config.AuditLog.Record("log_level_change", req.Level, "dashboard", extractOperator(r), r.RemoteAddr)
 		}
 
 		writeJSON(w, map[string]string{"status": "ok", "level": level.String()})

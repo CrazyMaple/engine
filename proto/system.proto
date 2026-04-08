@@ -1,0 +1,33 @@
+syntax = "proto3";
+
+package engine.proto;
+option go_package = "engine/proto";
+
+import "remote.proto";
+
+// Started Actor 启动完成事件
+message Started {}
+
+// Stopping Actor 正在停止事件
+message Stopping {}
+
+// Stopped Actor 已停止事件
+message Stopped {}
+
+// Restarting Actor 正在重启事件
+message Restarting {}
+
+// Watch 监视请求：watcher 监视目标 Actor
+message Watch {
+  PID watcher = 1;
+}
+
+// Unwatch 取消监视请求
+message Unwatch {
+  PID watcher = 1;
+}
+
+// Terminated Actor 已终止通知
+message Terminated {
+  PID who = 1;
+}

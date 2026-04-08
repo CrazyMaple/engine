@@ -7,8 +7,8 @@ import (
 func TestAuditLog_RecordAndRecent(t *testing.T) {
 	al := NewAuditLog()
 
-	al.Record("config_reload", "game.json", "dashboard")
-	al.Record("log_level_change", "info", "api")
+	al.Record("config_reload", "game.json", "dashboard", "admin", "127.0.0.1")
+	al.Record("log_level_change", "info", "api", "operator", "10.0.0.1")
 
 	entries := al.Recent(10)
 	if len(entries) != 2 {
@@ -30,10 +30,10 @@ func TestAuditLog_CircularBuffer(t *testing.T) {
 		maxSize: 3,
 	}
 
-	al.Record("a1", "d1", "s1")
-	al.Record("a2", "d2", "s2")
-	al.Record("a3", "d3", "s3")
-	al.Record("a4", "d4", "s4") // 覆盖 a1
+	al.Record("a1", "d1", "s1", "", "")
+	al.Record("a2", "d2", "s2", "", "")
+	al.Record("a3", "d3", "s3", "", "")
+	al.Record("a4", "d4", "s4", "", "") // 覆盖 a1
 
 	entries := al.Recent(10)
 	if len(entries) != 3 {

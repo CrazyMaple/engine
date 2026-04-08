@@ -45,6 +45,11 @@ func (rc *RootContext) Spawn(props *Props) *PID {
 
 // SpawnNamed 创建命名Actor
 func (rc *RootContext) SpawnNamed(props *Props, name string) *PID {
+	// 注入 EventStream 供背压邮箱使用
+	if props.eventStream == nil {
+		props.eventStream = rc.system.EventStream
+	}
+
 	pid, err := props.spawn(name, nil)
 	if err != nil {
 		panic(err)

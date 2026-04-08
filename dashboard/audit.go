@@ -9,10 +9,12 @@ const defaultAuditSize = 200
 
 // AuditEntry 审计日志条目
 type AuditEntry struct {
-	Time   time.Time `json:"time"`
-	Action string    `json:"action"`
-	Detail string    `json:"detail"`
-	Source string    `json:"source"` // 操作来源（如 "dashboard", "api"）
+	Time     time.Time `json:"time"`
+	Action   string    `json:"action"`
+	Detail   string    `json:"detail"`
+	Source   string    `json:"source"`    // 操作来源（如 "dashboard", "api"）
+	Operator string    `json:"operator"`  // 操作人标识
+	SourceIP string    `json:"source_ip"` // 来源 IP 地址
 }
 
 // AuditLog 审计日志，环形缓冲
@@ -33,15 +35,17 @@ func NewAuditLog() *AuditLog {
 }
 
 // Record 记录审计条目
-func (a *AuditLog) Record(action, detail, source string) {
+func (a *AuditLog) Record(action, detail, source, operator, sourceIP string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
 	a.entries[a.head] = AuditEntry{
-		Time:   time.Now(),
-		Action: action,
-		Detail: detail,
-		Source: source,
+		Time:     time.Now(),
+		Action:   action,
+		Detail:   detail,
+		Source:   source,
+		Operator: operator,
+		SourceIP: sourceIP,
 	}
 	a.head = (a.head + 1) % a.maxSize
 	if a.count < a.maxSize {

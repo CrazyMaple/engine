@@ -1,7 +1,6 @@
 package remote
 
 import (
-	"encoding/json"
 	"sync"
 	"time"
 
@@ -26,6 +25,9 @@ type Endpoint struct {
 	mu            sync.RWMutex
 	signer        *MessageSigner     // 可选的消息签名器
 	tlsCfg        *network.TLSConfig // 可选的 TLS 配置
+	codec         *RemoteCodec       // 编解码器
+	healthChk     *healthChecker     // 可选的健康检查器
+	retryQ        *retryQueue        // 可选的消息重发队列
 }
 
 // NewEndpoint 创建远程端点
@@ -63,6 +65,9 @@ func (ep *Endpoint) Start() {
 // Stop 停止端点
 func (ep *Endpoint) Stop() {
 	close(ep.stopChan)
+	if ep.healthChk != nil {
+		ep.healthChk.Stop()
+	}
 	if ep.client != nil {
 		ep.client.Close()
 	}
@@ -82,6 +87,13 @@ func (ep *Endpoint) sendLoop() {
 	batch := make([]*RemoteMessage, 0, maxBatchSize)
 	ticker := time.NewTicker(batchFlushTime)
 	defer ticker.Stop()
+
+	// 重发队列定时 drain（每秒一次）
+	var retryTicker *time.Ticker
+	if ep.retryQ != nil {
+		retryTicker = time.NewTicker(time.Second)
+		defer retryTicker.Stop()
+	}
 
 	for {
 		select {
@@ -111,6 +123,18 @@ func (ep *Endpoint) sendLoop() {
 			}
 			return
 		}
+
+		// 非阻塞检查 retry queue
+		if retryTicker != nil {
+			select {
+			case <-retryTicker.C:
+				ep.retryQ.Drain(func(msg *RemoteMessage) error {
+					ep.sendMessage(msg)
+					return nil
+				})
+			default:
+			}
+		}
 	}
 }
 
@@ -126,7 +150,14 @@ func (ep *Endpoint) sendBatch(batch []*RemoteMessage) {
 	ep.mu.RUnlock()
 
 	if !connected || conn == nil {
-		log.Debug("Endpoint not connected, %d messages dropped", len(batch))
+		if ep.retryQ != nil {
+			for _, msg := range batch {
+				ep.retryQ.Add(msg)
+			}
+			log.Debug("Endpoint not connected, %d messages queued for retry", len(batch))
+		} else {
+			log.Debug("Endpoint not connected, %d messages dropped", len(batch))
+		}
 		return
 	}
 
@@ -141,7 +172,7 @@ func (ep *Endpoint) sendBatch(batch []*RemoteMessage) {
 	buf := actor.AcquireBuffer()
 	defer actor.ReleaseBuffer(buf)
 
-	data, err := json.Marshal(batchMsg)
+	data, err := ep.codec.MarshalEnvelope(batchMsg)
 	if err != nil {
 		log.Error("Marshal batch error: %v", err)
 		return
@@ -170,7 +201,7 @@ func (ep *Endpoint) sendMessage(msg *RemoteMessage) {
 	}
 
 	// 序列化消息
-	data, err := json.Marshal(msg)
+	data, err := ep.codec.MarshalEnvelope(msg)
 	if err != nil {
 		log.Error("Marshal message error: %v", err)
 		return
@@ -212,11 +243,26 @@ func (a *endpointAgent) Run() {
 	a.endpoint.setConn(a.conn)
 	log.Info("Connected to remote endpoint: %s", a.endpoint.address)
 
-	// 保持连接，接收消息由remoteAgent处理
+	// 启动健康检查器（如已配置）
+	if a.endpoint.healthChk != nil {
+		a.endpoint.healthChk.Start()
+	}
+
+	// 保持连接，接收消息
 	for {
-		_, err := a.conn.ReadMsg()
+		data, err := a.conn.ReadMsg()
 		if err != nil {
 			break
+		}
+		// 处理 Pong 响应
+		if a.endpoint.healthChk != nil && a.endpoint.codec != nil {
+			_, _, single, uerr := a.endpoint.codec.UnmarshalEnvelope(data)
+			if uerr == nil && single != nil {
+				if _, ok := single.Message.(*PongMessage); ok {
+					a.endpoint.healthChk.OnPong()
+					continue
+				}
+			}
 		}
 	}
 }
@@ -233,6 +279,7 @@ type EndpointManager struct {
 	mu        sync.RWMutex
 	signer    *MessageSigner     // 可选的消息签名器
 	tlsCfg    *network.TLSConfig // 可选的 TLS 配置
+	codec     *RemoteCodec       // 编解码器
 }
 
 // NewEndpointManager 创建端点管理器
@@ -265,6 +312,7 @@ func (em *EndpointManager) GetEndpoint(address string) *Endpoint {
 	ep = NewEndpoint(address)
 	ep.signer = em.signer
 	ep.tlsCfg = em.tlsCfg
+	ep.codec = em.codec
 	ep.Start()
 	em.endpoints[address] = ep
 

@@ -1,0 +1,53 @@
+syntax = "proto3";
+
+package engine.proto;
+option go_package = "engine/proto";
+
+// MemberStatus 集群成员状态
+enum MemberStatus {
+  ALIVE = 0;    // 正常运行
+  SUSPECT = 1;  // 疑似宕机
+  DEAD = 2;     // 确认宕机
+  LEFT = 3;     // 主动离开
+}
+
+// Member 集群成员信息
+message Member {
+  string address = 1;         // 节点地址
+  string id = 2;              // 节点唯一标识
+  repeated string kinds = 3;  // 支持的 Actor Kind
+  MemberStatus status = 4;    // 当前状态
+  uint64 seq = 5;             // Lamport 版本号
+}
+
+// MemberGossipState 成员 Gossip 状态
+message MemberGossipState {
+  string address = 1;
+  string id = 2;
+  repeated string kinds = 3;
+  MemberStatus status = 4;
+  uint64 seq = 5;
+}
+
+// GossipState Gossip 协议状态（CRDT）
+message GossipState {
+  map<string, MemberGossipState> members = 1;
+}
+
+// GossipRequest Gossip 请求
+message GossipRequest {
+  string cluster_name = 1;
+  GossipState state = 2;
+}
+
+// GossipResponse Gossip 响应
+message GossipResponse {
+  GossipState state = 1;
+}
+
+// ClusterTopologyEvent 集群拓扑变更事件
+message ClusterTopologyEvent {
+  repeated Member members = 1;
+  repeated Member joined = 2;
+  repeated Member left = 3;
+}

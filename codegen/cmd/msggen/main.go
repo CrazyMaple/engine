@@ -10,6 +10,7 @@ import (
 
 func main() {
 	input := flag.String("input", "", "输入 Go 源文件（包含消息结构体定义）")
+	proto := flag.String("proto", "", "输入 .proto 文件（与 -input 互斥）")
 	output := flag.String("output", "", "输出 Go 文件路径")
 	pkg := flag.String("pkg", "main", "生成代码的包名")
 	tsOutput := flag.String("ts", "", "可选：TypeScript 类型定义输出路径")
@@ -17,14 +18,25 @@ func main() {
 	csOutput := flag.String("cs", "", "可选：C# 类型定义输出路径（Unity 客户端）")
 	csNamespace := flag.String("cs-ns", "GameMessages", "C# 命名空间")
 	docOutput := flag.String("doc", "", "可选：Markdown API 文档输出路径")
+	registryOutput := flag.String("registry", "", "可选：TypeRegistry 注册代码输出路径")
 	flag.Parse()
 
-	if *input == "" {
-		fmt.Fprintln(os.Stderr, "Usage: msggen -input=messages.go -output=messages_gen.go [-pkg=mygame] [-ts=types.ts] [-sdk=sdk.ts] [-cs=Messages.cs] [-cs-ns=GameNS] [-doc=api.md]")
+	if *input == "" && *proto == "" {
+		fmt.Fprintln(os.Stderr, "Usage: msggen -input=messages.go|-proto=messages.proto -output=messages_gen.go [-pkg=mygame] [-ts=types.ts] [-sdk=sdk.ts] [-cs=Messages.cs] [-cs-ns=GameNS] [-doc=api.md] [-registry=registry_gen.go]")
+		os.Exit(1)
+	}
+	if *input != "" && *proto != "" {
+		fmt.Fprintln(os.Stderr, "错误: -input 和 -proto 不能同时指定")
 		os.Exit(1)
 	}
 
-	msgs, err := codegen.ParseFile(*input)
+	var msgs []codegen.MessageDef
+	var err error
+	if *proto != "" {
+		msgs, err = codegen.ParseProtoFile(*proto)
+	} else {
+		msgs, err = codegen.ParseFile(*input)
+	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "解析失败: %v\n", err)
 		os.Exit(1)
@@ -105,5 +117,19 @@ func main() {
 			os.Exit(1)
 		}
 		fmt.Printf("API 文档已生成: %s\n", *docOutput)
+	}
+
+	// 生成 TypeRegistry 注册代码
+	if *registryOutput != "" {
+		code, err := codegen.GenerateTypeRegistry(msgs, *pkg)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "生成 TypeRegistry 代码失败: %v\n", err)
+			os.Exit(1)
+		}
+		if err := os.WriteFile(*registryOutput, code, 0644); err != nil {
+			fmt.Fprintf(os.Stderr, "写入文件失败: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("TypeRegistry 注册代码已生成: %s\n", *registryOutput)
 	}
 }

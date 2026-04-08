@@ -35,6 +35,8 @@ type Config struct {
 	ConfigManager *config.Manager
 	// AuditLog 审计日志（可选）
 	AuditLog *AuditLog
+	// Auth 访问鉴权配置（可选，nil 则无鉴权）
+	Auth *AuthConfig
 }
 
 // Dashboard Web 管理面板
@@ -65,9 +67,14 @@ func (d *Dashboard) Start() error {
 	mux := http.NewServeMux()
 	d.registerRoutes(mux)
 
+	var handler http.Handler = mux
+	if d.config.Auth != nil {
+		handler = authMiddleware(d.config.Auth, mux)
+	}
+
 	d.server = &http.Server{
 		Addr:         d.config.Addr,
-		Handler:      mux,
+		Handler:      handler,
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 10 * time.Second,
 	}

@@ -5,7 +5,35 @@ import (
 	"errors"
 	"io"
 	"math"
+	"sync"
 )
+
+// msgBufPool 消息缓冲区对象池，复用常见大小的消息缓冲区以减少 GC 压力
+const msgBufPoolMaxSize = 4096
+
+var msgBufPool = sync.Pool{
+	New: func() interface{} {
+		buf := make([]byte, msgBufPoolMaxSize)
+		return &buf
+	},
+}
+
+// acquireMsgBuf 从池中获取消息缓冲区
+func acquireMsgBuf(size int) []byte {
+	if size <= msgBufPoolMaxSize {
+		bufPtr := msgBufPool.Get().(*[]byte)
+		return (*bufPtr)[:size]
+	}
+	return make([]byte, size)
+}
+
+// ReleaseMsgBuf 归还消息缓冲区到对象池（仅 <= 4KB 的缓冲区会被回收）
+func ReleaseMsgBuf(buf []byte) {
+	if cap(buf) >= msgBufPoolMaxSize {
+		b := buf[:msgBufPoolMaxSize]
+		msgBufPool.Put(&b)
+	}
+}
 
 // MsgParser 消息分帧器
 // 消息格式: | len | data |
@@ -96,8 +124,8 @@ func (p *MsgParser) Read(conn *TCPConn) ([]byte, error) {
 		return nil, errors.New("message too short")
 	}
 
-	// 读取数据
-	msgData := make([]byte, msgLen)
+	// 读取数据（使用对象池减少分配）
+	msgData := acquireMsgBuf(int(msgLen))
 	if _, err := io.ReadFull(conn, msgData); err != nil {
 		return nil, err
 	}

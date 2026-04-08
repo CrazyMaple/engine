@@ -100,6 +100,29 @@ func GenerateTSSDK(msgs []MessageDef) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+// GenerateTypeRegistry 生成 TypeRegistry 注册代码
+// 用于将 proto 解析出的消息类型注册到 remote.TypeRegistry
+func GenerateTypeRegistry(msgs []MessageDef, pkg string) ([]byte, error) {
+	tmpl, err := template.New("registry").Parse(typeRegistryTemplate)
+	if err != nil {
+		return nil, fmt.Errorf("parse registry template: %w", err)
+	}
+
+	data := struct {
+		Package  string
+		Messages []MessageDef
+	}{
+		Package:  pkg,
+		Messages: msgs,
+	}
+
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, data); err != nil {
+		return nil, fmt.Errorf("execute registry template: %w", err)
+	}
+	return buf.Bytes(), nil
+}
+
 func goTypeToTS(goType string) string {
 	switch goType {
 	case "int", "int8", "int16", "int32", "int64",

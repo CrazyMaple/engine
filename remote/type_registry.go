@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"sync"
 
+	"engine/codec"
 	engerr "engine/errors"
 )
 
@@ -81,6 +82,27 @@ func (r *TypeRegistry) Deserialize(typeName string, data []byte) (interface{}, e
 		return nil, &engerr.CodecError{Op: "deserialize", TypeName: typeName, Cause: err}
 	}
 	return ptr, nil
+}
+
+// DeserializeWith 使用指定 Codec 反序列化消息
+func (r *TypeRegistry) DeserializeWith(typeName string, data []byte, c codec.Codec) (interface{}, error) {
+	if c == nil {
+		return r.Deserialize(typeName, data)
+	}
+
+	r.mu.RLock()
+	_, ok := r.nameToType[typeName]
+	r.mu.RUnlock()
+
+	if !ok {
+		return nil, &engerr.CodecError{Op: "deserialize", TypeName: typeName, Cause: engerr.ErrNotFound}
+	}
+
+	decoded, err := c.Decode(data)
+	if err != nil {
+		return nil, &engerr.CodecError{Op: "deserialize", TypeName: typeName, Cause: err}
+	}
+	return decoded, nil
 }
 
 // 全局默认类型注册表

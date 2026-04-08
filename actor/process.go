@@ -11,9 +11,10 @@ type Process interface {
 
 // ProcessRegistry 管理本地Actor进程
 type ProcessRegistry struct {
-	localActors map[string]Process
-	remoteProc  Process // 远程进程代理
-	mu          sync.RWMutex
+	localActors    map[string]Process
+	remoteProc     Process // 远程进程代理
+	federatedProc  Process // 联邦进程代理（跨集群）
+	mu             sync.RWMutex
 }
 
 // NewProcessRegistry 创建进程注册表
@@ -28,6 +29,13 @@ func (pr *ProcessRegistry) SetRemoteProcess(process Process) {
 	pr.mu.Lock()
 	defer pr.mu.Unlock()
 	pr.remoteProc = process
+}
+
+// SetFederatedProcess 设置联邦进程代理（用于跨集群消息路由）
+func (pr *ProcessRegistry) SetFederatedProcess(process Process) {
+	pr.mu.Lock()
+	defer pr.mu.Unlock()
+	pr.federatedProc = process
 }
 
 // Add 注册进程
@@ -47,6 +55,17 @@ func (pr *ProcessRegistry) Remove(pid *PID) {
 
 // Get 获取进程
 func (pr *ProcessRegistry) Get(pid *PID) (Process, bool) {
+	// 如果是联邦 PID（cluster:// 开头），返回联邦进程代理
+	if !pid.IsLocal() && len(pid.Address) > 10 && pid.Address[:10] == "cluster://" {
+		pr.mu.RLock()
+		fp := pr.federatedProc
+		pr.mu.RUnlock()
+		if fp != nil {
+			return fp, true
+		}
+		return nil, false
+	}
+
 	// 如果是远程PID，返回远程进程代理
 	if !pid.IsLocal() {
 		pr.mu.RLock()

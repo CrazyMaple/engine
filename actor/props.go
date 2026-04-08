@@ -14,6 +14,7 @@ type Props struct {
 	receiveTimeout     time.Duration
 	onInit             func(ctx Context)
 	receiverMiddleware []ReceiverMiddleware
+	eventStream        *EventStream // 用于背压邮箱事件发布
 }
 
 // PropsFromProducer 从生产者创建Props
@@ -69,6 +70,26 @@ func (props *Props) WithReceiverMiddleware(mw ...ReceiverMiddleware) *Props {
 	return props
 }
 
+// WithBackpressureMailbox 创建带背压机制的有界邮箱
+func (props *Props) WithBackpressureMailbox(capacity int, config BackpressureConfig) *Props {
+	props.mailbox = func() Mailbox {
+		return NewBackpressureMailbox(capacity, config)
+	}
+	return props
+}
+
+// WithBatchMailbox 创建批处理邮箱
+// 累积 batchSize 条消息或等待 batchTimeout 后批量投递给 BatchActor.BatchReceive
+func (props *Props) WithBatchMailbox(batchSize int, batchTimeout time.Duration) *Props {
+	props.mailbox = func() Mailbox {
+		return NewBatchMailbox(BatchMailboxConfig{
+			BatchSize:    batchSize,
+			BatchTimeout: batchTimeout,
+		})
+	}
+	return props
+}
+
 // spawn 创建Actor实例
 func (props *Props) spawn(id string, parent *PID) (*PID, error) {
 	actor := props.producer()
@@ -98,6 +119,24 @@ func (props *Props) spawn(id string, parent *PID) (*PID, error) {
 
 	if mb, ok := cell.mailbox.(*defaultMailbox); ok {
 		mb.SetScheduler(props.dispatcher)
+	}
+	if mb, ok := cell.mailbox.(*backpressureMailbox); ok {
+		mb.SetScheduler(props.dispatcher)
+		mb.SetOwnerPID(pid)
+		if props.eventStream != nil {
+			mb.SetEventStream(props.eventStream)
+		}
+	}
+	if mb, ok := cell.mailbox.(*boundedMailbox); ok {
+		mb.SetScheduler(props.dispatcher)
+	}
+	if mb, ok := cell.mailbox.(*batchMailbox); ok {
+		mb.SetScheduler(props.dispatcher)
+		if ba, ok := actor.(BatchActor); ok {
+			mb.RegisterBatchHandler(func(msgs []interface{}) {
+				ba.BatchReceive(cell, msgs)
+			})
+		}
 	}
 
 	pid.p = cell

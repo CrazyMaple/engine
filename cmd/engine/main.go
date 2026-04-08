@@ -1,0 +1,49 @@
+package main
+
+import (
+	"fmt"
+	"os"
+)
+
+var commands = map[string]func(args []string) error{
+	"init":      cmdInit,
+	"gen":       cmdGen,
+	"run":       cmdRun,
+	"dashboard": cmdDashboard,
+	"bench":     cmdBench,
+}
+
+func main() {
+	if len(os.Args) < 2 {
+		printUsage()
+		os.Exit(1)
+	}
+
+	cmd, ok := commands[os.Args[1]]
+	if !ok {
+		fmt.Fprintf(os.Stderr, "未知命令: %s\n", os.Args[1])
+		printUsage()
+		os.Exit(1)
+	}
+
+	if err := cmd(os.Args[2:]); err != nil {
+		fmt.Fprintf(os.Stderr, "错误: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func printUsage() {
+	fmt.Println(`engine — 游戏引擎 CLI 工具
+
+使用方法:
+  engine <command> [flags]
+
+命令:
+  init        初始化项目脚手架
+  gen         统一代码生成入口（消息注册 + SDK + Proto）
+  run         带热重载的开发模式
+  dashboard   独立启动 Dashboard 面板
+  bench       运行全部基准测试并生成报告
+
+使用 engine <command> -h 查看各命令帮助`)
+}

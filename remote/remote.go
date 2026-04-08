@@ -1,7 +1,6 @@
 package remote
 
 import (
-	"encoding/json"
 	"sync"
 
 	"engine/actor"
@@ -22,6 +21,12 @@ type Remote struct {
 	Signer        *MessageSigner
 	// TLSCfg 可选的 TLS 配置，启用后远程通信使用 TLS 加密
 	TLSCfg        *network.TLSConfig
+	// Codec 可选的编解码器，nil 使用 JSON 兜底
+	Codec         *RemoteCodec
+	// HealthCheck 可选的连接健康检查配置
+	HealthCheck   HealthCheckConfig
+	// RetryQueue 可选的消息重发队列配置
+	RetryQueue    RetryQueueConfig
 }
 
 // NewRemote 创建远程通信管理器
@@ -42,9 +47,15 @@ func (r *Remote) Start() {
 		return
 	}
 
-	// 传递签名器和 TLS 配置到端点管理器
+	// 初始化默认 Codec
+	if r.Codec == nil {
+		r.Codec = DefaultRemoteCodec()
+	}
+
+	// 传递签名器、TLS 配置和 Codec 到端点管理器
 	r.endpointMgr.signer = r.Signer
 	r.endpointMgr.tlsCfg = r.TLSCfg
+	r.endpointMgr.codec = r.Codec
 
 	// 启动TCP服务器监听远程连接
 	r.server = &network.TCPServer{
@@ -154,23 +165,20 @@ func (a *remoteAgent) Run() {
 			data = payload
 		}
 
-		// 尝试解析为批量消息
-		var batchMsg RemoteMessageBatch
-		if err := json.Unmarshal(data, &batchMsg); err == nil && len(batchMsg.Messages) > 0 {
+		// 使用 Codec 反序列化远程消息（自动区分批量/单条）
+		isBatch, batchMsg, singleMsg, unmarshalErr := a.remote.Codec.UnmarshalEnvelope(data)
+		if unmarshalErr != nil {
+			log.Error("Unmarshal message error: %v", unmarshalErr)
+			continue
+		}
+
+		if isBatch {
 			for _, msg := range batchMsg.Messages {
 				a.resolveAndRoute(msg)
 			}
-			continue
+		} else {
+			a.resolveAndRoute(singleMsg)
 		}
-
-		// 解析为单条消息
-		var remoteMsg RemoteMessage
-		if err := json.Unmarshal(data, &remoteMsg); err != nil {
-			log.Error("Unmarshal message error: %v", err)
-			continue
-		}
-
-		a.resolveAndRoute(&remoteMsg)
 	}
 }
 
@@ -183,8 +191,8 @@ func (a *remoteAgent) resolveAndRoute(msg *RemoteMessage) {
 	// 如果有类型名称，尝试类型化反序列化
 	if msg.TypeName != "" {
 		if rawMsg, ok := msg.Message.(map[string]interface{}); ok {
-			rawBytes, _ := json.Marshal(rawMsg)
-			if typed, err := defaultTypeRegistry.Deserialize(msg.TypeName, rawBytes); err == nil {
+			rawBytes, _ := a.remote.Codec.MarshalPayload(rawMsg)
+			if typed, err := a.remote.Codec.UnmarshalPayload(msg.TypeName, rawBytes, defaultTypeRegistry); err == nil {
 				msg.Message = typed
 			}
 		}
