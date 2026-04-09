@@ -204,3 +204,88 @@ func (rf *RecordFile) Index(key interface{}) interface{} {
 	}
 	return idx[key]
 }
+
+// ReadFromRows 从二维字符串切片加载数据
+// headerRow 指定表头行号（从 0 开始），表头行及之前的行被跳过，之后为数据行
+// 可被 ExcelReader 等外部数据源复用
+func (rf *RecordFile) ReadFromRows(rows [][]string, headerRow int) error {
+	if len(rows) <= headerRow+1 {
+		rf.records = nil
+		rf.indexes = nil
+		return nil
+	}
+
+	typeRecord := rf.typeRecord
+	numFields := typeRecord.NumField()
+
+	indexes := make([]Index, 0)
+	for i := 0; i < numFields; i++ {
+		if typeRecord.Field(i).Tag.Get("rf") == "index" {
+			indexes = append(indexes, make(Index))
+		}
+	}
+
+	records := make([]interface{}, 0, len(rows)-headerRow-1)
+
+	for n := headerRow + 1; n < len(rows); n++ {
+		line := rows[n]
+
+		// 跳过空行
+		if isEmptyRow(line) {
+			continue
+		}
+
+		// 补齐不足的字段为空字符串（Excel 尾部空列可能被裁剪）
+		for len(line) < numFields {
+			line = append(line, "")
+		}
+
+		if len(line) > numFields {
+			return fmt.Errorf("row %d: field count mismatch, got %d, expect %d",
+				n+1, len(line), numFields)
+		}
+
+		value := reflect.New(typeRecord)
+		record := value.Elem()
+		iIndex := 0
+
+		for i := 0; i < numFields; i++ {
+			f := typeRecord.Field(i)
+			strField := line[i]
+			field := record.Field(i)
+			if !field.CanSet() {
+				continue
+			}
+
+			if err := setField(field, f.Type.Kind(), strField); err != nil {
+				return fmt.Errorf("row %d, field %s: %v", n+1, f.Name, err)
+			}
+
+			if f.Tag.Get("rf") == "index" {
+				index := indexes[iIndex]
+				iIndex++
+				key := field.Interface()
+				if _, ok := index[key]; ok {
+					return fmt.Errorf("row %d, field %s: duplicate index key %v", n+1, f.Name, key)
+				}
+				index[key] = value.Interface()
+			}
+		}
+
+		records = append(records, value.Interface())
+	}
+
+	rf.records = records
+	rf.indexes = indexes
+	return nil
+}
+
+// isEmptyRow 判断一行是否全为空
+func isEmptyRow(row []string) bool {
+	for _, cell := range row {
+		if cell != "" {
+			return false
+		}
+	}
+	return true
+}

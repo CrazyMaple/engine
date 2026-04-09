@@ -15,6 +15,8 @@ type Props struct {
 	onInit             func(ctx Context)
 	receiverMiddleware []ReceiverMiddleware
 	eventStream        *EventStream // 用于背压邮箱事件发布
+	lifecycleHooks     *LifecycleHooks
+	stashCapacity      int // 消息暂存栈容量，0 使用默认值
 }
 
 // PropsFromProducer 从生产者创建Props
@@ -90,6 +92,12 @@ func (props *Props) WithBatchMailbox(batchSize int, batchTimeout time.Duration) 
 	return props
 }
 
+// WithStashCapacity 设置消息暂存栈容量
+func (props *Props) WithStashCapacity(capacity int) *Props {
+	props.stashCapacity = capacity
+	return props
+}
+
 // spawn 创建Actor实例
 func (props *Props) spawn(id string, parent *PID) (*PID, error) {
 	actor := props.producer()
@@ -112,6 +120,11 @@ func (props *Props) spawn(id string, parent *PID) (*PID, error) {
 		supervisorStrategy: props.supervisorStrategy,
 		receiveTimeout:     props.receiveTimeout,
 		behavior:           NewBehaviorStack(actor.Receive),
+		lifecycleHooks:     props.lifecycleHooks,
+	}
+
+	if props.stashCapacity > 0 {
+		cell.stash = newMessageStash(props.stashCapacity)
 	}
 
 	cell.mailbox = props.mailbox()
@@ -136,6 +149,13 @@ func (props *Props) spawn(id string, parent *PID) (*PID, error) {
 			mb.RegisterBatchHandler(func(msgs []interface{}) {
 				ba.BatchReceive(cell, msgs)
 			})
+		}
+	}
+	if mb, ok := cell.mailbox.(*priorityMailbox); ok {
+		mb.SetScheduler(props.dispatcher)
+		mb.SetOwnerPID(pid)
+		if props.eventStream != nil {
+			mb.SetEventStream(props.eventStream)
 		}
 	}
 

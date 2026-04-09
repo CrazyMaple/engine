@@ -20,12 +20,15 @@ type actorCell struct {
 	behavior           *BehaviorStack
 	mailbox            Mailbox
 	message            interface{}
+	rawMessage         interface{} // 原始消息（含信封），用于 Stash
 	sender             *PID
 	traceID            string // 当前消息的链路追踪 ID
 	stopping           bool
 	restarting         bool
 	restartStats       *RestartStatistics
 	receiveTimeoutTimer *time.Timer
+	lifecycleHooks     *LifecycleHooks
+	stash              *messageStash
 	mu                 sync.RWMutex
 }
 
@@ -189,6 +192,7 @@ func (cell *actorCell) processMessage(message interface{}, isSystem bool) {
 	// 解包消息信封，提取 sender 和 traceID
 	actualMsg, sender, traceID := UnwrapEnvelopeFull(message)
 	cell.message = actualMsg
+	cell.rawMessage = message // 保留原始消息用于 Stash
 	cell.sender = sender
 	cell.traceID = traceID
 
@@ -199,6 +203,7 @@ func (cell *actorCell) processMessage(message interface{}, isSystem bool) {
 
 	switch msg := actualMsg.(type) {
 	case *Started:
+		cell.invokePreStart()
 		cell.behavior.Receive(cell)
 	case *Stopping:
 		cell.handleStopping()
@@ -250,15 +255,18 @@ func (cell *actorCell) handleStopped() {
 	defaultSystem.ProcessRegistry.Remove(cell.self)
 	cell.notifyWatchers()
 	cell.CancelReceiveTimeout()
+	cell.invokePostStop()
 }
 
 func (cell *actorCell) handleRestarting() {
 	cell.restarting = true
+	cell.invokePreRestart()
 	cell.stopAllChildren()
 	cell.actor = cell.producer()
 	cell.behavior = NewBehaviorStack(cell.actor.Receive)
 	cell.restarting = false
 	cell.SendSystemMessage(cell.self, &Started{})
+	cell.invokePostRestart()
 }
 
 func (cell *actorCell) handleWatch(msg *Watch) {
@@ -308,6 +316,43 @@ func (cell *actorCell) notifyWatchers() {
 	}
 }
 
+// StashContext 接口实现
+
+func (cell *actorCell) Stash() error {
+	if cell.stash == nil {
+		cell.stash = newMessageStash(DefaultStashCapacity)
+	}
+	// 暂存原始消息（含信封信息），但不归还信封到池中
+	// 需要复制信封以避免被 processMessage 的 defer ReleaseEnvelope 回收
+	msg := cell.rawMessage
+	if env, ok := msg.(*MessageEnvelope); ok {
+		copied := &MessageEnvelope{
+			Message: env.Message,
+			Sender:  env.Sender,
+			TraceID: env.TraceID,
+		}
+		msg = copied
+	}
+	return cell.stash.push(msg)
+}
+
+func (cell *actorCell) UnstashAll() {
+	if cell.stash == nil {
+		return
+	}
+	msgs := cell.stash.popAll()
+	for _, m := range msgs {
+		cell.mailbox.PostUserMessage(m.message)
+	}
+}
+
+func (cell *actorCell) StashSize() int {
+	if cell.stash == nil {
+		return 0
+	}
+	return cell.stash.size()
+}
+
 // Supervisor接口实现
 
 func (cell *actorCell) EscalateFailure(reason interface{}, message interface{}) {
@@ -353,6 +398,39 @@ func (cell *actorCell) handleFailure(msg *Failure) {
 		cell.StopChildren(msg.Who)
 	case EscalateDirective:
 		cell.EscalateFailure(msg.Reason, msg)
+	}
+}
+
+// 生命周期钩子调用
+
+func (cell *actorCell) hookTimeout() time.Duration {
+	if cell.lifecycleHooks != nil && cell.lifecycleHooks.HookTimeout > 0 {
+		return cell.lifecycleHooks.HookTimeout
+	}
+	return DefaultHookTimeout
+}
+
+func (cell *actorCell) invokePreStart() {
+	if cell.lifecycleHooks != nil && cell.lifecycleHooks.PreStart != nil {
+		executeHook(cell, cell.lifecycleHooks.PreStart, cell.hookTimeout())
+	}
+}
+
+func (cell *actorCell) invokePostStop() {
+	if cell.lifecycleHooks != nil && cell.lifecycleHooks.PostStop != nil {
+		executeHook(cell, cell.lifecycleHooks.PostStop, cell.hookTimeout())
+	}
+}
+
+func (cell *actorCell) invokePreRestart() {
+	if cell.lifecycleHooks != nil && cell.lifecycleHooks.PreRestart != nil {
+		executeHook(cell, cell.lifecycleHooks.PreRestart, cell.hookTimeout())
+	}
+}
+
+func (cell *actorCell) invokePostRestart() {
+	if cell.lifecycleHooks != nil && cell.lifecycleHooks.PostRestart != nil {
+		executeHook(cell, cell.lifecycleHooks.PostRestart, cell.hookTimeout())
 	}
 }
 

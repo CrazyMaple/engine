@@ -50,6 +50,12 @@ type ActorPool struct {
 	totalCreated   int64
 	totalDestroyed int64
 	totalRouted    int64
+	scaleUpTotal   int64
+	scaleDownTotal int64
+
+	// MetricsRegistry 集成（可选）
+	metrics     PoolMetrics
+	metricsName string
 }
 
 // poolRoutee 池中的 Actor 条目
@@ -248,6 +254,7 @@ func (p *ActorPool) checkScale() {
 		if avgLoad > int64(p.config.ScaleThreshold) {
 			// 扩容一个
 			p.spawnRoutee()
+			p.incScaleUp()
 			return
 		}
 	}
@@ -265,6 +272,7 @@ func (p *ActorPool) checkScale() {
 				p.system.Root.Stop(r.pid)
 				p.routees = append(p.routees[:i], p.routees[i+1:]...)
 				atomic.AddInt64(&p.totalDestroyed, 1)
+				p.incScaleDown()
 			}
 		}
 	}

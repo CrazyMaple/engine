@@ -9,6 +9,17 @@ type Context interface {
 	SenderContext
 	ReceiverContext
 	SpawnerContext
+	StashContext
+}
+
+// StashContext 提供消息暂存能力
+type StashContext interface {
+	// Stash 将当前消息放入暂存栈，等待后续 UnstashAll 重新投递
+	Stash() error
+	// UnstashAll 将暂存栈中的消息按 FIFO 顺序重新投递到 Mailbox
+	UnstashAll()
+	// StashSize 返回当前暂存消息数量
+	StashSize() int
 }
 
 // InfoContext 提供Actor信息

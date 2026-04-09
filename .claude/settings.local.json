@@ -29,7 +29,11 @@
       "Bash(go vet:*)",
       "Bash(cat router/*.go cluster/*.go grain/*.go pubsub/*.go remote/type_registry.go)",
       "Bash(xargs sed:*)",
-      "Bash(echo \"exit: $?\")"
+      "Bash(echo \"exit: $?\")",
+      "Bash(file /data/works/mindserver/qmcreator/code/engine/proto/*.proto)",
+      "Bash(/tmp/msggen -h)",
+      "Read(//tmp/**)",
+      "Bash(/tmp/msggen -proto=/data/works/mindserver/qmcreator/code/engine/proto/remote.proto -output=test_out.go -pkg=testpkg)"
     ],
     "additionalDirectories": [
       "e:\\workspace\\qm\\qmserver\\.claude\\docs\\output\\funcdesc",

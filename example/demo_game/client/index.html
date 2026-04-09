@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Guess Number - Online Game Demo</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, sans-serif; background: #1a1a2e; color: #e0e0e0; }
+.container { max-width: 800px; margin: 0 auto; padding: 20px; }
+h1 { color: #0ff; text-align: center; margin-bottom: 20px; }
+.panel { background: #16213e; border: 1px solid #0f3460; border-radius: 8px; padding: 20px; margin-bottom: 16px; }
+.panel h2 { color: #7fdbff; margin-bottom: 12px; font-size: 18px; }
+.status { font-size: 14px; color: #aaa; }
+.status.connected { color: #2ecc71; }
+.status.disconnected { color: #e74c3c; }
+.log { background: #0a0a1a; border-radius: 4px; padding: 12px; max-height: 300px; overflow-y: auto; font-family: monospace; font-size: 13px; line-height: 1.6; }
+.log .system { color: #7fdbff; }
+.log .you { color: #2ecc71; }
+.log .opponent { color: #f39c12; }
+.log .result { color: #0ff; font-weight: bold; }
+.input-row { display: flex; gap: 8px; margin-top: 12px; }
+.input-row input { flex: 1; padding: 10px; border: 1px solid #0f3460; border-radius: 4px; background: #0a0a1a; color: #e0e0e0; font-size: 16px; }
+.input-row button { padding: 10px 24px; background: #0f3460; color: #0ff; border: 1px solid #0ff; border-radius: 4px; cursor: pointer; font-size: 16px; }
+.input-row button:hover { background: #0ff; color: #0f3460; }
+.input-row button:disabled { opacity: 0.5; cursor: not-allowed; }
+.leaderboard table { width: 100%; border-collapse: collapse; }
+.leaderboard th { background: #0f3460; color: #7fdbff; text-align: left; padding: 8px; }
+.leaderboard td { padding: 8px; border-bottom: 1px solid #1a1a3e; }
+.btn { padding: 8px 20px; background: #0f3460; color: #0ff; border: 1px solid #0ff; border-radius: 4px; cursor: pointer; }
+.btn:hover { background: #0ff; color: #0f3460; }
+.range-hint { text-align: center; font-size: 24px; color: #0ff; margin: 12px 0; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>Guess Number - Online Demo</h1>
+  <p style="text-align:center;color:#7fdbff;margin-bottom:20px">
+    Engine Actor-Based Game Framework Demo
+  </p>
+
+  <!-- 连接状态 -->
+  <div class="panel">
+    <h2>Connection</h2>
+    <p>Status: <span id="connStatus" class="status disconnected">Disconnected</span></p>
+    <div class="input-row" style="margin-top:8px">
+      <input id="playerName" placeholder="Enter your name..." value="">
+      <button id="btnConnect" onclick="connectGame()">Join Game</button>
+    </div>
+  </div>
+
+  <!-- 游戏区域 -->
+  <div class="panel" id="gamePanel" style="display:none">
+    <h2>Game Room</h2>
+    <div class="range-hint">
+      Range: <span id="rangeLow">1</span> - <span id="rangeHigh">100</span>
+    </div>
+    <div class="input-row">
+      <input id="guessInput" type="number" min="1" max="100" placeholder="Your guess (1-100)">
+      <button id="btnGuess" onclick="sendGuess()" disabled>Guess!</button>
+    </div>
+    <div class="log" id="gameLog"></div>
+  </div>
+
+  <!-- 排行榜 -->
+  <div class="panel leaderboard">
+    <h2>Leaderboard</h2>
+    <table>
+      <thead><tr><th>#</th><th>Player</th><th>Score</th></tr></thead>
+      <tbody id="lbBody">
+        <tr><td colspan="3" style="color:#555">No data yet</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+// --- Game Client (Simulated WebSocket Protocol) ---
+// Note: This is a standalone HTML demo. In production, it connects via WebSocket
+// to the Gate server. Here we simulate the game logic client-side for demonstration.
+
+let gameState = {
+  connected: false,
+  inGame: false,
+  myTurn: false,
+  target: 0,
+  rangeLow: 1,
+  rangeHigh: 100,
+  round: 0,
+  myGuesses: 0,
+  opponentGuesses: 0,
+  scores: {}
+};
+
+function connectGame() {
+  const name = document.getElementById('playerName').value.trim();
+  if (!name) { alert('Please enter your name'); return; }
+
+  document.getElementById('connStatus').textContent = 'Connected as ' + name;
+  document.getElementById('connStatus').className = 'status connected';
+  document.getElementById('btnConnect').disabled = true;
+  document.getElementById('gamePanel').style.display = 'block';
+
+  gameState.connected = true;
+  gameState.playerName = name;
+
+  addLog('system', 'Connected! Waiting for opponent...');
+  // Simulate matching after a short delay
+  setTimeout(() => startSimulatedGame(name), 1000);
+}
+
+function startSimulatedGame(name) {
+  gameState.target = Math.floor(Math.random() * 100) + 1;
+  gameState.rangeLow = 1;
+  gameState.rangeHigh = 100;
+  gameState.round = 1;
+  gameState.myGuesses = 0;
+  gameState.opponentGuesses = 0;
+  gameState.inGame = true;
+  gameState.myTurn = true;
+
+  addLog('system', 'Matched! Game started. You go first.');
+  addLog('system', 'Guess a number between 1 and 100');
+  updateRange();
+  document.getElementById('btnGuess').disabled = false;
+  document.getElementById('guessInput').focus();
+}
+
+function sendGuess() {
+  if (!gameState.myTurn || !gameState.inGame) return;
+
+  const input = document.getElementById('guessInput');
+  const guess = parseInt(input.value);
+  if (isNaN(guess) || guess < 1 || guess > 100) {
+    alert('Please enter a number between 1 and 100');
+    return;
+  }
+
+  input.value = '';
+  gameState.myGuesses++;
+
+  let result;
+  if (guess < gameState.target) {
+    result = 'Too Low';
+    if (guess >= gameState.rangeLow) gameState.rangeLow = guess + 1;
+    addLog('you', `You guessed ${guess} → ${result}`);
+  } else if (guess > gameState.target) {
+    result = 'Too High';
+    if (guess <= gameState.rangeHigh) gameState.rangeHigh = guess - 1;
+    addLog('you', `You guessed ${guess} → ${result}`);
+  } else {
+    addLog('result', `You guessed ${guess} → CORRECT! You WIN!`);
+    endGame(gameState.playerName);
+    return;
+  }
+
+  updateRange();
+  gameState.myTurn = false;
+  document.getElementById('btnGuess').disabled = true;
+
+  // Simulate opponent's turn
+  setTimeout(() => opponentTurn(), 800);
+}
+
+function opponentTurn() {
+  if (!gameState.inGame) return;
+
+  gameState.opponentGuesses++;
+  // AI opponent uses binary search
+  const guess = Math.floor((gameState.rangeLow + gameState.rangeHigh) / 2);
+
+  if (guess === gameState.target) {
+    addLog('opponent', `Opponent guessed ${guess} → CORRECT!`);
+    addLog('result', 'Opponent wins!');
+    endGame('Opponent');
+    return;
+  }
+
+  if (guess < gameState.target) {
+    addLog('opponent', `Opponent guessed ${guess} → Too Low`);
+  } else {
+    addLog('opponent', `Opponent guessed ${guess} → Too High`);
+  }
+
+  gameState.round++;
+  gameState.myTurn = true;
+  document.getElementById('btnGuess').disabled = false;
+  document.getElementById('guessInput').focus();
+}
+
+function endGame(winner) {
+  gameState.inGame = false;
+  gameState.myTurn = false;
+  document.getElementById('btnGuess').disabled = true;
+
+  const guesses = winner === gameState.playerName ? gameState.myGuesses : gameState.opponentGuesses;
+  const score = Math.max(10, 100 - guesses * 10);
+  addLog('system', `Game Over! Target: ${gameState.target}, Winner: ${winner}, Score: ${score}`);
+
+  // Update leaderboard
+  if (!gameState.scores[winner]) gameState.scores[winner] = 0;
+  gameState.scores[winner] += score;
+  updateLeaderboard();
+
+  // Auto-restart after delay
+  setTimeout(() => {
+    addLog('system', '--- New game starting in 3 seconds ---');
+    setTimeout(() => startSimulatedGame(gameState.playerName), 3000);
+  }, 1000);
+}
+
+function updateRange() {
+  document.getElementById('rangeLow').textContent = gameState.rangeLow;
+  document.getElementById('rangeHigh').textContent = gameState.rangeHigh;
+}
+
+function updateLeaderboard() {
+  const entries = Object.entries(gameState.scores)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 10);
+
+  const tbody = document.getElementById('lbBody');
+  if (entries.length === 0) return;
+
+  tbody.innerHTML = entries.map(([name, score], i) =>
+    `<tr><td>${i + 1}</td><td>${name}</td><td>${score}</td></tr>`
+  ).join('');
+}
+
+function addLog(type, text) {
+  const log = document.getElementById('gameLog');
+  const time = new Date().toLocaleTimeString();
+  const line = document.createElement('div');
+  line.className = type;
+  line.textContent = `[${time}] ${text}`;
+  log.appendChild(line);
+  log.scrollTop = log.scrollHeight;
+}
+
+// Handle Enter key in guess input
+document.addEventListener('DOMContentLoaded', () => {
+  document.getElementById('guessInput').addEventListener('keypress', (e) => {
+    if (e.key === 'Enter') sendGuess();
+  });
+  document.getElementById('playerName').addEventListener('keypress', (e) => {
+    if (e.key === 'Enter') connectGame();
+  });
+});
+</script>
+</body>
+</html>

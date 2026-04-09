@@ -668,6 +668,38 @@ func (h *handlers) handleLogLevel(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// ---- GET /api/deadletters ----
+
+type deadLetterResponse struct {
+	Stats   interface{} `json:"stats"`
+	Records interface{} `json:"records"`
+}
+
+func (h *handlers) handleDeadLetters(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	if h.config.DeadLetterMonitor == nil {
+		writeError(w, http.StatusNotFound, "dead letter monitor not configured")
+		return
+	}
+
+	n := 50
+	if nStr := r.URL.Query().Get("n"); nStr != "" {
+		if parsed, err := strconv.Atoi(nStr); err == nil && parsed > 0 {
+			n = parsed
+		}
+	}
+
+	resp := deadLetterResponse{
+		Stats:   h.config.DeadLetterMonitor.Stats(),
+		Records: h.config.DeadLetterMonitor.RecentRecords(n),
+	}
+	writeJSON(w, resp)
+}
+
 // ---- GET / (Dashboard 首页) ----
 
 func (h *handlers) handleIndex(w http.ResponseWriter, r *http.Request) {

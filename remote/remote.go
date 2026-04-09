@@ -27,6 +27,8 @@ type Remote struct {
 	HealthCheck   HealthCheckConfig
 	// RetryQueue 可选的消息重发队列配置
 	RetryQueue    RetryQueueConfig
+	// futureRegistry 远程 Future 注册表（跨节点 Request-Response）
+	futureRegistry *RemoteFutureRegistry
 }
 
 // NewRemote 创建远程通信管理器
@@ -76,6 +78,9 @@ func (r *Remote) Start() {
 
 	// 自动注册远程进程代理，使远程 PID 可通过 ProcessRegistry 路由
 	r.system.ProcessRegistry.SetRemoteProcess(NewRemoteProcess(r))
+
+	// 初始化远程 Future 注册表
+	r.futureRegistry = NewRemoteFutureRegistry()
 
 	r.started = true
 	log.Info("Remote started on %s", r.address)
@@ -197,6 +202,13 @@ func (a *remoteAgent) resolveAndRoute(msg *RemoteMessage) {
 			}
 		}
 	}
+
+	// 处理远程响应消息
+	if resp, ok := msg.Message.(*RemoteResponseMessage); ok {
+		a.remote.handleRemoteResponse(resp)
+		return
+	}
+
 	a.routeMessage(msg)
 }
 

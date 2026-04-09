@@ -83,3 +83,21 @@ func (fp *futureProcess) SendSystemMessage(pid *PID, message interface{}) {
 func (fp *futureProcess) Stop(pid *PID) {
 	fp.future.complete(&ErrTimeout{})
 }
+
+// FutureProcess_Export 导出的 Future 进程，供 remote 包使用
+type FutureProcess_Export struct {
+	Future *Future
+}
+
+func (fp *FutureProcess_Export) SendUserMessage(pid *PID, message interface{}) {
+	msg, _ := UnwrapEnvelope(message)
+	fp.Future.complete(msg)
+}
+
+func (fp *FutureProcess_Export) SendSystemMessage(pid *PID, message interface{}) {
+	fp.Future.complete(message)
+}
+
+func (fp *FutureProcess_Export) Stop(pid *PID) {
+	fp.Future.complete(&ErrTimeout{})
+}

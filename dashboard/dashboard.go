@@ -37,14 +37,21 @@ type Config struct {
 	AuditLog *AuditLog
 	// Auth 访问鉴权配置（可选，nil 则无鉴权）
 	Auth *AuthConfig
+	// DeadLetterMonitor 死信监控器（可选）
+	DeadLetterMonitor *actor.DeadLetterMonitor
+	// HealthChecker 健康检查管理器（可选，注册 /healthz 和 /readyz 端点）
+	HealthChecker *HealthChecker
+	// LivePush Dashboard v3 实时 WebSocket 推送配置（可选）
+	LivePush *LivePushConfig
 }
 
 // Dashboard Web 管理面板
 type Dashboard struct {
-	config  Config
-	server  *http.Server
-	started bool
-	mu      sync.Mutex
+	config   Config
+	server   *http.Server
+	livePush *LivePushServer
+	started  bool
+	mu       sync.Mutex
 }
 
 // New 创建 Dashboard
@@ -62,6 +69,11 @@ func (d *Dashboard) Start() error {
 
 	if d.started {
 		return nil
+	}
+
+	// 初始化 v3 WebSocket 实时推送（路由注册前创建）
+	if d.config.LivePush != nil {
+		d.livePush = NewLivePushServer(d.config, *d.config.LivePush)
 	}
 
 	mux := http.NewServeMux()
@@ -86,6 +98,11 @@ func (d *Dashboard) Start() error {
 		}
 	}()
 
+	// 启动 v3 WebSocket 实时推送
+	if d.livePush != nil {
+		d.livePush.Start()
+	}
+
 	d.started = true
 	return nil
 }
@@ -97,6 +114,11 @@ func (d *Dashboard) Stop() error {
 
 	if !d.started {
 		return nil
+	}
+
+	// 停止 v3 LivePush
+	if d.livePush != nil {
+		d.livePush.Stop()
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -130,4 +152,20 @@ func (d *Dashboard) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/config/reload", h.handleConfigReload)
 	mux.HandleFunc("/api/audit", h.handleAuditLog)
 	mux.HandleFunc("/api/log/level", h.handleLogLevel)
+	mux.HandleFunc("/api/deadletters", h.handleDeadLetters)
+
+	// v3 新增路由
+	mux.HandleFunc("/api/report", h.handleReportJSON)
+	mux.HandleFunc("/api/report.csv", h.handleReportCSV)
+	mux.HandleFunc("/api/actors/heatmap", h.handleHeatmap)
+
+	// WebSocket 实时推送（v3）
+	if d.livePush != nil {
+		mux.HandleFunc("/ws/live", d.livePush.HandleWebSocket)
+	}
+
+	// 健康检查端点（与 Dashboard 复用端口）
+	if d.config.HealthChecker != nil {
+		RegisterHealthRoutes(mux, d.config.HealthChecker)
+	}
 }
