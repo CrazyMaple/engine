@@ -123,6 +123,46 @@ func GenerateTypeRegistry(msgs []MessageDef, pkg string) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+// GenerateCSharpSDK 生成完整的 C# 客户端 SDK（含 TCP/WebSocket 连接管理、自动重连、消息路由）
+func GenerateCSharpSDK(msgs []MessageDef, namespace string) ([]byte, error) {
+	tmpl, err := template.New("cssdk").Funcs(template.FuncMap{
+		"csType": goTypeToCSharp,
+	}).Parse(csharpSDKTemplate)
+	if err != nil {
+		return nil, fmt.Errorf("parse csharp sdk template: %w", err)
+	}
+
+	data := struct {
+		Namespace string
+		Messages  []MessageDef
+	}{
+		Namespace: namespace,
+		Messages:  msgs,
+	}
+
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, data); err != nil {
+		return nil, fmt.Errorf("execute csharp sdk template: %w", err)
+	}
+	return buf.Bytes(), nil
+}
+
+// GenerateTSSDKEnhanced 生成增强版 TypeScript SDK（含消息路由分发器 + Protobuf 编解码支持）
+func GenerateTSSDKEnhanced(msgs []MessageDef) ([]byte, error) {
+	tmpl, err := template.New("tssdk2").Funcs(template.FuncMap{
+		"tsType": goTypeToTS,
+	}).Parse(tsSDKEnhancedTemplate)
+	if err != nil {
+		return nil, fmt.Errorf("parse enhanced sdk template: %w", err)
+	}
+
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, msgs); err != nil {
+		return nil, fmt.Errorf("execute enhanced sdk template: %w", err)
+	}
+	return buf.Bytes(), nil
+}
+
 func goTypeToTS(goType string) string {
 	switch goType {
 	case "int", "int8", "int16", "int32", "int64",

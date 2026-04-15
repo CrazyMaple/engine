@@ -8,6 +8,7 @@ import (
 
 	"engine/actor"
 	"engine/cluster"
+	"engine/cluster/canary"
 	"engine/config"
 	"engine/log"
 	"engine/middleware"
@@ -43,6 +44,16 @@ type Config struct {
 	HealthChecker *HealthChecker
 	// LivePush Dashboard v3 实时 WebSocket 推送配置（可选）
 	LivePush *LivePushConfig
+	// Profiler 性能分析器（可选，支持按需/自动 Profiling）
+	Profiler *middleware.Profiler
+	// ActorProfiler Actor 级别 Profiling（可选，支持每 Actor 消息耗时统计）
+	ActorProfiler *middleware.ActorProfiler
+	// CanaryEngine 灰度发布引擎（可选，支持灰度规则和权重路由）
+	CanaryEngine *canary.Engine
+	// CanaryComparator 灰度指标对比器（可选，支持版本间指标对比）
+	CanaryComparator *canary.Comparator
+	// GMManager GM 管理后台（可选，支持 GM 命令、权限控制、批量操作）
+	GMManager *GMManager
 }
 
 // Dashboard Web 管理面板
@@ -162,6 +173,41 @@ func (d *Dashboard) registerRoutes(mux *http.ServeMux) {
 	// WebSocket 实时推送（v3）
 	if d.livePush != nil {
 		mux.HandleFunc("/ws/live", d.livePush.HandleWebSocket)
+	}
+
+	// Profiler 端点（按需/自动 Profiling + Actor 级别分析）
+	if d.config.Profiler != nil {
+		mux.HandleFunc("/api/profiler/cpu", h.handleProfilerCPU)
+		mux.HandleFunc("/api/profiler/heap", h.handleProfilerHeap)
+		mux.HandleFunc("/api/profiler/goroutine", h.handleProfilerGoroutine)
+		mux.HandleFunc("/api/profiler/block", h.handleProfilerBlock)
+		mux.HandleFunc("/api/profiler/list", h.handleProfilerList)
+		mux.HandleFunc("/api/profiler/get", h.handleProfilerGet)
+		mux.HandleFunc("/api/profiler/diff", h.handleProfilerDiff)
+		mux.HandleFunc("/api/profiler/auto/config", h.handleProfilerAutoConfig)
+	}
+	if d.config.ActorProfiler != nil {
+		mux.HandleFunc("/api/profiler/actors", h.handleProfilerActors)
+		mux.HandleFunc("/api/profiler/actors/enable", h.handleProfilerActorsEnable)
+		mux.HandleFunc("/api/profiler/actors/disable", h.handleProfilerActorsDisable)
+	}
+
+	// 灰度发布端点
+	if d.config.CanaryEngine != nil {
+		mux.HandleFunc("/api/canary/status", h.handleCanaryStatus)
+		mux.HandleFunc("/api/canary/rules", h.handleCanaryRules)
+		mux.HandleFunc("/api/canary/weights", h.handleCanaryWeights)
+		mux.HandleFunc("/api/canary/promote", h.handleCanaryPromote)
+		mux.HandleFunc("/api/canary/rollback", h.handleCanaryRollback)
+	}
+	if d.config.CanaryComparator != nil {
+		mux.HandleFunc("/api/canary/compare", h.handleCanaryCompare)
+	}
+
+	// GM 管理后台端点
+	if d.config.GMManager != nil {
+		gmHandlers := NewGMHandlers(d.config.GMManager)
+		gmHandlers.RegisterRoutes(mux)
 	}
 
 	// 健康检查端点（与 Dashboard 复用端口）

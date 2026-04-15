@@ -33,7 +33,11 @@
       "Bash(file /data/works/mindserver/qmcreator/code/engine/proto/*.proto)",
       "Bash(/tmp/msggen -h)",
       "Read(//tmp/**)",
-      "Bash(/tmp/msggen -proto=/data/works/mindserver/qmcreator/code/engine/proto/remote.proto -output=test_out.go -pkg=testpkg)"
+      "Bash(/tmp/msggen -proto=/data/works/mindserver/qmcreator/code/engine/proto/remote.proto -output=test_out.go -pkg=testpkg)",
+      "Bash(echo \"Exit: $?\")",
+      "Bash(echo \"Build Exit: $?\")",
+      "Bash(awk '{print $NF}')",
+      "Bash(go get *)"
     ],
     "additionalDirectories": [
       "e:\\workspace\\qm\\qmserver\\.claude\\docs\\output\\funcdesc",

@@ -1,0 +1,95 @@
+# Engine Helm Chart 默认值
+# 支持三种部署模式：standalone / cluster / multi-region
+
+# 部署模式：standalone | cluster | multi-region
+mode: standalone
+
+image:
+  repository: engine/engine
+  tag: "1.8.0"
+  pullPolicy: IfNotPresent
+
+# 副本数（cluster 模式生效）
+replicaCount: 1
+
+# 节点角色：gate | game | all
+nodeRole: all
+
+# 服务端口
+service:
+  type: ClusterIP
+  # 客户端网关端口（TCP）
+  gatePort: 7100
+  # WebSocket 端口
+  wsPort: 7200
+  # Dashboard/API 端口
+  dashboardPort: 8080
+  # 集群 Gossip 端口
+  gossipPort: 9100
+
+# 资源限制
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: "2"
+    memory: 1Gi
+
+# 健康检查
+healthcheck:
+  liveness:
+    path: /healthz
+    initialDelaySeconds: 10
+    periodSeconds: 15
+    timeoutSeconds: 3
+    failureThreshold: 3
+  readiness:
+    path: /readyz
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 3
+
+# HPA 自动伸缩
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 20
+  metrics:
+    - type: Pods
+      pods:
+        metric:
+          name: engine_gate_connection_count
+        target:
+          type: AverageValue
+          averageValue: "1000"
+
+# 集群配置（cluster / multi-region 模式）
+cluster:
+  name: engine-cluster
+  seedNodes: []
+  gossipInterval: 500ms
+  heartbeatInterval: 2s
+  kinds:
+    - game
+    - gate
+
+# ConfigMap 配置挂载
+config:
+  enabled: false
+  mountPath: /etc/engine/config
+  # 内联配置内容（会创建 ConfigMap）
+  data: {}
+
+# Prometheus 监控
+monitoring:
+  enabled: true
+  serviceMonitor:
+    enabled: false
+    interval: 15s
+
+# Pod 调度
+nodeSelector: {}
+tolerations: []
+affinity: {}

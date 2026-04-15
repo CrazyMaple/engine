@@ -1,0 +1,14 @@
+apiVersion: v2
+name: engine
+description: Engine — Actor-based Go game backend engine
+type: application
+version: 0.1.0
+appVersion: "1.8.0"
+keywords:
+  - game
+  - actor
+  - distributed
+  - golang
+maintainers:
+  - name: engine-team
+home: https://github.com/engine/engine

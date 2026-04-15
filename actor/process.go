@@ -41,16 +41,20 @@ func (pr *ProcessRegistry) SetFederatedProcess(process Process) {
 // Add 注册进程
 func (pr *ProcessRegistry) Add(pid *PID, process Process) {
 	pr.mu.Lock()
-	defer pr.mu.Unlock()
 	pr.localActors[pid.Id] = process
 	pid.p = process
+	pr.mu.Unlock()
+	// 同步写入全局 PID 缓存
+	globalPIDCache.Set(pid, process)
 }
 
 // Remove 移除进程
 func (pr *ProcessRegistry) Remove(pid *PID) {
 	pr.mu.Lock()
-	defer pr.mu.Unlock()
 	delete(pr.localActors, pid.Id)
+	pr.mu.Unlock()
+	// 失效 PID 缓存
+	globalPIDCache.Invalidate(pid)
 }
 
 // Get 获取进程
@@ -77,14 +81,24 @@ func (pr *ProcessRegistry) Get(pid *PID) (Process, bool) {
 		return nil, false
 	}
 
-	// 本地PID - 先尝试缓存
+	// 本地 PID 快路径：pid.p 直接缓存命中（零开销）
 	if pid.p != nil {
 		return pid.p, true
 	}
 
+	// 次级缓存：全局 PIDCache 查找（sync.Map，无锁）
+	if p, ok := globalPIDCache.Get(pid); ok {
+		return p, true
+	}
+
+	// 最后回退到 RWMutex 保护的 map 查找
 	pr.mu.RLock()
-	defer pr.mu.RUnlock()
 	p, ok := pr.localActors[pid.Id]
+	pr.mu.RUnlock()
+	if ok {
+		// 回填到缓存
+		globalPIDCache.Set(pid, p)
+	}
 	return p, ok
 }
 

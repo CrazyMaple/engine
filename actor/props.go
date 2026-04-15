@@ -158,6 +158,12 @@ func (props *Props) spawn(id string, parent *PID) (*PID, error) {
 			mb.SetEventStream(props.eventStream)
 		}
 	}
+	if mb, ok := cell.mailbox.(*ringBufferMailbox); ok {
+		mb.SetScheduler(props.dispatcher)
+	}
+	if mb, ok := cell.mailbox.(*adaptiveMailbox); ok {
+		mb.SetScheduler(props.dispatcher)
+	}
 
 	pid.p = cell
 	cell.mailbox.Start()

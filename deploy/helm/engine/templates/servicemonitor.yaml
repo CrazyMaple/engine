@@ -1,0 +1,19 @@
+{{- if and .Values.monitoring.enabled .Values.monitoring.serviceMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ .Release.Name }}-engine
+  labels:
+    app.kubernetes.io/name: engine
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: helm
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: engine
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  endpoints:
+    - port: dashboard
+      path: /api/metrics/prometheus
+      interval: {{ .Values.monitoring.serviceMonitor.interval }}
+{{- end }}

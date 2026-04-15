@@ -1,0 +1,15 @@
+{{- if .Values.config.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-engine-config
+  labels:
+    app.kubernetes.io/name: engine
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: helm
+data:
+  {{- range $key, $value := .Values.config.data }}
+  {{ $key }}: |
+    {{ $value | nindent 4 }}
+  {{- end }}
+{{- end }}

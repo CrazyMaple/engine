@@ -1,0 +1,62 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: engineclusters.engine.io
+spec:
+  group: engine.io
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                replicas:
+                  type: integer
+                  minimum: 1
+                  description: "Number of engine nodes"
+                version:
+                  type: string
+                  description: "Engine image version tag"
+                clusterName:
+                  type: string
+                  description: "Logical cluster name for gossip"
+                image:
+                  type: string
+                  description: "Container image repository"
+                kinds:
+                  type: array
+                  items:
+                    type: string
+                  description: "Supported actor kinds (e.g. gate, game)"
+                config:
+                  type: object
+                  properties:
+                    configMapRef:
+                      type: string
+                      description: "Reference to an existing ConfigMap"
+                    inline:
+                      type: object
+                      x-kubernetes-preserve-unknown-fields: true
+                      description: "Inline configuration data"
+            status:
+              type: object
+              properties:
+                readyReplicas:
+                  type: integer
+                phase:
+                  type: string
+                  enum: ["Pending", "Running", "Upgrading", "Failed"]
+      subresources:
+        status: {}
+  scope: Namespaced
+  names:
+    plural: engineclusters
+    singular: enginecluster
+    kind: EngineCluster
+    shortNames:
+      - ec
