@@ -1,0 +1,200 @@
+package quest
+
+import (
+	"fmt"
+	"sync"
+	"time"
+)
+
+// GameEvent 游戏事件（用于驱动任务进度）
+type GameEvent struct {
+	Type     string // 事件类型（如 "kill_monster","collect_item","reach_level"）
+	TargetID string // 目标对象 ID
+	Count    int    // 数量
+	PlayerID string // 触发玩家 ID
+}
+
+// QuestTracker 任务追踪器
+// 管理玩家的任务列表，监听游戏事件驱动进度
+type QuestTracker struct {
+	mu       sync.RWMutex
+	playerID string
+	registry *QuestRegistry
+	active   map[string]*QuestInstance // questID → 实例
+	history  map[string]QuestStatus    // questID → 终态（已完成/已失败）
+	onChange func(playerID string, quest *QuestInstance) // 进度变更回调
+}
+
+// NewQuestTracker 创建任务追踪器
+func NewQuestTracker(playerID string, registry *QuestRegistry) *QuestTracker {
+	return &QuestTracker{
+		playerID: playerID,
+		registry: registry,
+		active:   make(map[string]*QuestInstance),
+		history:  make(map[string]QuestStatus),
+	}
+}
+
+// SetOnChange 设置进度变更回调
+func (t *QuestTracker) SetOnChange(fn func(playerID string, quest *QuestInstance)) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.onChange = fn
+}
+
+// Accept 接取任务
+func (t *QuestTracker) Accept(questID string, now time.Time) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	// 检查是否已接取
+	if _, ok := t.active[questID]; ok {
+		return fmt.Errorf("quest %s already active", questID)
+	}
+
+	// 检查是否已完成
+	if status, ok := t.history[questID]; ok && status == QuestRewarded {
+		return fmt.Errorf("quest %s already completed", questID)
+	}
+
+	// 获取任务定义
+	def, ok := t.registry.Get(questID)
+	if !ok {
+		return fmt.Errorf("quest %s not found", questID)
+	}
+
+	// 检查前置任务
+	for _, prereq := range def.PrereqIDs {
+		status, ok := t.history[prereq]
+		if !ok || status != QuestRewarded {
+			return fmt.Errorf("prerequisite quest %s not completed", prereq)
+		}
+	}
+
+	inst := NewQuestInstance(def, t.playerID, now)
+	t.active[questID] = inst
+	return nil
+}
+
+// HandleEvent 处理游戏事件，更新所有相关任务进度
+func (t *QuestTracker) HandleEvent(event GameEvent) []QuestUpdate {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	var updates []QuestUpdate
+	for _, quest := range t.active {
+		if quest.UpdateProgress(event.Type, event.TargetID, event.Count) {
+			updates = append(updates, QuestUpdate{
+				QuestID:  quest.Def.ID,
+				PlayerID: t.playerID,
+				Status:   quest.Status,
+				Progress: quest.Progress(),
+			})
+
+			if t.onChange != nil {
+				t.onChange(t.playerID, quest)
+			}
+		}
+	}
+	return updates
+}
+
+// ClaimRewards 领取任务奖励
+func (t *QuestTracker) ClaimRewards(questID string) ([]RewardDef, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	quest, ok := t.active[questID]
+	if !ok {
+		return nil, fmt.Errorf("quest %s not active", questID)
+	}
+
+	rewards, err := quest.ClaimRewards()
+	if err != nil {
+		return nil, err
+	}
+	if rewards == nil {
+		return nil, fmt.Errorf("quest %s not completed", questID)
+	}
+
+	// 移入历史记录
+	t.history[questID] = QuestRewarded
+	delete(t.active, questID)
+
+	return rewards, nil
+}
+
+// Abandon 放弃任务
+func (t *QuestTracker) Abandon(questID string) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	quest, ok := t.active[questID]
+	if !ok {
+		return fmt.Errorf("quest %s not active", questID)
+	}
+
+	quest.Fail()
+	t.history[questID] = QuestFailed
+	delete(t.active, questID)
+	return nil
+}
+
+// CheckExpired 检查并处理超时任务
+func (t *QuestTracker) CheckExpired(now time.Time) []string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	var expired []string
+	for id, quest := range t.active {
+		if quest.IsExpired(now) {
+			quest.Fail()
+			t.history[id] = QuestFailed
+			delete(t.active, id)
+			expired = append(expired, id)
+		}
+	}
+	return expired
+}
+
+// GetActive 获取所有活跃任务
+func (t *QuestTracker) GetActive() []*QuestInstance {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	result := make([]*QuestInstance, 0, len(t.active))
+	for _, q := range t.active {
+		result = append(result, q)
+	}
+	return result
+}
+
+// GetQuest 获取指定任务
+func (t *QuestTracker) GetQuest(questID string) (*QuestInstance, bool) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	q, ok := t.active[questID]
+	return q, ok
+}
+
+// IsCompleted 检查任务是否已完成并领奖
+func (t *QuestTracker) IsCompleted(questID string) bool {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.history[questID] == QuestRewarded
+}
+
+// ActiveCount 活跃任务数量
+func (t *QuestTracker) ActiveCount() int {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return len(t.active)
+}
+
+// QuestUpdate 任务进度更新通知
+type QuestUpdate struct {
+	QuestID  string
+	PlayerID string
+	Status   QuestStatus
+	Progress int // 百分比 0-100
+}

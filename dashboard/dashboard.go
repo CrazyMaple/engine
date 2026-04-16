@@ -54,6 +54,12 @@ type Config struct {
 	CanaryComparator *canary.Comparator
 	// GMManager GM 管理后台（可选，支持 GM 命令、权限控制、批量操作）
 	GMManager *GMManager
+	// BTDebugRegistry 行为树调试注册表（可选，支持行为树执行路径可视化）
+	BTDebugRegistry *BTDebugRegistry
+	// CanaryRuleEngine 增强规则引擎（可选，支持 AND/OR 组合条件）
+	CanaryRuleEngine *canary.RuleEngine
+	// ABTestManager A/B 测试管理器（可选，支持实验创建和变体分配）
+	ABTestManager *canary.ABTestManager
 }
 
 // Dashboard Web 管理面板
@@ -204,10 +210,30 @@ func (d *Dashboard) registerRoutes(mux *http.ServeMux) {
 		mux.HandleFunc("/api/canary/compare", h.handleCanaryCompare)
 	}
 
+	// 灰度增强规则引擎端点
+	if d.config.CanaryRuleEngine != nil {
+		mux.HandleFunc("/api/canary/advanced_rules", h.handleCanaryAdvancedRules)
+		mux.HandleFunc("/api/canary/rule_hits", h.handleCanaryRuleHits)
+	}
+	// A/B 测试端点
+	if d.config.ABTestManager != nil {
+		mux.HandleFunc("/api/ab/experiments", h.handleABExperiments)
+		mux.HandleFunc("/api/ab/experiment", h.handleABExperiment)
+		mux.HandleFunc("/api/ab/assign", h.handleABAssign)
+		mux.HandleFunc("/api/ab/stats", h.handleABStats)
+	}
+
 	// GM 管理后台端点
 	if d.config.GMManager != nil {
 		gmHandlers := NewGMHandlers(d.config.GMManager)
 		gmHandlers.RegisterRoutes(mux)
+	}
+
+	// 行为树调试端点
+	if d.config.BTDebugRegistry != nil {
+		mux.HandleFunc("/api/bt/list", h.handleBTList)
+		mux.HandleFunc("/api/bt/detail", h.handleBTDetail)
+		mux.HandleFunc("/api/bt/stats", h.handleBTStats)
 	}
 
 	// 健康检查端点（与 Dashboard 复用端口）

@@ -11,6 +11,9 @@ var commands = map[string]func(args []string) error{
 	"run":       cmdRun,
 	"dashboard": cmdDashboard,
 	"bench":     cmdBench,
+	"plugin":    cmdPlugin,
+	"cluster":   cmdCluster,
+	"migrate":   cmdMigrate,
 }
 
 func main() {
@@ -44,6 +47,9 @@ func printUsage() {
   run         带热重载的开发模式
   dashboard   独立启动 Dashboard 面板
   bench       运行全部基准测试并生成报告
+  plugin      插件管理（install/remove/list/info）
+  cluster     集群状态查看（status/nodes/health）
+  migrate     Actor 迁移管理（actor/drain/status）
 
 使用 engine <command> -h 查看各命令帮助`)
 }

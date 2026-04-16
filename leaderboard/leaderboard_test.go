@@ -1,6 +1,7 @@
 package leaderboard
 
 import (
+	"fmt"
 	"testing"
 )
 
@@ -212,5 +213,65 @@ func TestLeaderboardActor_SnapshotCallback(t *testing.T) {
 	}
 	if _, ok := snapshotData["daily"]; !ok {
 		t.Error("snapshot missing daily board")
+	}
+}
+
+// --- GetRank O(log N) 基准测试 ---
+
+func BenchmarkGetRank_10K(b *testing.B) {
+	benchGetRank(b, 10_000)
+}
+
+func BenchmarkGetRank_100K(b *testing.B) {
+	benchGetRank(b, 100_000)
+}
+
+func BenchmarkGetRank_1M(b *testing.B) {
+	benchGetRank(b, 1_000_000)
+}
+
+func benchGetRank(b *testing.B, n int) {
+	sl := NewSkipList()
+	for i := 0; i < n; i++ {
+		sl.Upsert(fmt.Sprintf("p%d", i), float64(i), "")
+	}
+
+	// 查询中间位置的排名（最能体现 O(N) vs O(log N) 差异）
+	targetID := fmt.Sprintf("p%d", n/2)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		sl.GetRank(targetID)
+	}
+}
+
+// TestGetRank_LargeScale 大规模排名正确性验证
+func TestGetRank_LargeScale(t *testing.T) {
+	sl := NewSkipList()
+	const n = 1000
+
+	for i := 0; i < n; i++ {
+		sl.Upsert(fmt.Sprintf("p%d", i), float64(i), "")
+	}
+
+	// 最高分 p999 排名应为 1
+	if rank := sl.GetRank(fmt.Sprintf("p%d", n-1)); rank != 1 {
+		t.Errorf("highest score rank = %d, want 1", rank)
+	}
+	// 最低分 p0 排名应为 n
+	if rank := sl.GetRank("p0"); rank != n {
+		t.Errorf("lowest score rank = %d, want %d", rank, n)
+	}
+	// 中间分数排名
+	mid := n / 2
+	expectedRank := n - mid
+	if rank := sl.GetRank(fmt.Sprintf("p%d", mid)); rank != expectedRank {
+		t.Errorf("mid score rank = %d, want %d", rank, expectedRank)
+	}
+
+	// 删除后排名更新
+	sl.Remove(fmt.Sprintf("p%d", n-1)) // 删除最高分
+	if rank := sl.GetRank(fmt.Sprintf("p%d", n-2)); rank != 1 {
+		t.Errorf("after remove, new top rank = %d, want 1", rank)
 	}
 }

@@ -37,7 +37,10 @@
       "Bash(echo \"Exit: $?\")",
       "Bash(echo \"Build Exit: $?\")",
       "Bash(awk '{print $NF}')",
-      "Bash(go get *)"
+      "Bash(go get *)",
+      "Bash(head *)",
+      "Bash(go list *)",
+      "Bash(go run *)"
     ],
     "additionalDirectories": [
       "e:\\workspace\\qm\\qmserver\\.claude\\docs\\output\\funcdesc",

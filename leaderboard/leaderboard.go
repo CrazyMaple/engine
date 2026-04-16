@@ -23,6 +23,7 @@ type Entry struct {
 type skipNode struct {
 	entry Entry
 	next  []*skipNode
+	span  []int // span[i] 表示第 i 层到 next[i] 跨越的元素数
 }
 
 // SkipList 有序跳表（按 Score 降序），支持 O(log N) 插入/查询/排名
@@ -36,8 +37,12 @@ type SkipList struct {
 
 // NewSkipList 创建跳表
 func NewSkipList() *SkipList {
+	head := &skipNode{
+		next: make([]*skipNode, maxLevel),
+		span: make([]int, maxLevel),
+	}
 	return &SkipList{
-		head:  &skipNode{next: make([]*skipNode, maxLevel)},
+		head:  head,
 		level: 1,
 		index: make(map[string]*skipNode),
 	}
@@ -70,29 +75,53 @@ func (sl *SkipList) Upsert(playerID string, score float64, extra string) int {
 	}
 
 	lvl := randomLevel()
+	oldLevel := sl.level
 	if lvl > sl.level {
+		// 新增的层级 head 的 span 应指向当前全部元素+1（跨过所有已有节点）
+		for i := oldLevel; i < lvl; i++ {
+			sl.head.span[i] = sl.size + 1
+		}
 		sl.level = lvl
 	}
 
 	newNode := &skipNode{
 		entry: entry,
 		next:  make([]*skipNode, lvl),
+		span:  make([]int, lvl),
 	}
 
 	// 降序插入：score 大的在前面
+	// rank[i] 记录在第 i 层 update[i] 节点前累积的排名偏移
 	update := make([]*skipNode, maxLevel)
+	rank := make([]int, maxLevel)
 	curr := sl.head
 	for i := sl.level - 1; i >= 0; i-- {
+		if i == sl.level-1 {
+			rank[i] = 0
+		} else {
+			rank[i] = rank[i+1]
+		}
 		for curr.next[i] != nil && (curr.next[i].entry.Score > score ||
 			(curr.next[i].entry.Score == score && curr.next[i].entry.UpdateAt < now)) {
+			rank[i] += curr.span[i]
 			curr = curr.next[i]
 		}
 		update[i] = curr
 	}
 
+	// 插入新节点并更新 span
 	for i := 0; i < lvl; i++ {
 		newNode.next[i] = update[i].next[i]
 		update[i].next[i] = newNode
+
+		// newNode.span[i] = update[i] 原来的 span - (新节点在 level 0 的位置差)
+		newNode.span[i] = update[i].span[i] - (rank[0] - rank[i])
+		update[i].span[i] = rank[0] - rank[i] + 1
+	}
+
+	// 更高层的 update 节点 span +1（因为插入了一个新元素）
+	for i := lvl; i < sl.level; i++ {
+		update[i].span[i]++
 	}
 
 	sl.index[playerID] = newNode
@@ -131,7 +160,18 @@ func (sl *SkipList) removeLocked(playerID string) bool {
 	for i := 0; i < len(node.next); i++ {
 		if update[i].next[i] == node {
 			update[i].next[i] = node.next[i]
+			update[i].span[i] += node.span[i] - 1
 		}
+	}
+
+	// 更高层的 update 节点 span -1
+	for i := len(node.next); i < sl.level; i++ {
+		update[i].span[i]--
+	}
+
+	// 缩减空层级
+	for sl.level > 1 && sl.head.next[sl.level-1] == nil {
+		sl.level--
 	}
 
 	delete(sl.index, playerID)
@@ -152,14 +192,23 @@ func (sl *SkipList) getRankLocked(playerID string) int {
 		return -1
 	}
 
+	// O(log N)：从高层开始累加 span，利用跳表层级加速
 	rank := 0
 	curr := sl.head
-	for curr.next[0] != nil {
-		if curr.next[0] == node {
-			return rank + 1
+	for i := sl.level - 1; i >= 0; i-- {
+		for curr.next[i] != nil && curr.next[i] != node {
+			if curr.next[i].entry.Score > node.entry.Score ||
+				(curr.next[i].entry.Score == node.entry.Score && curr.next[i].entry.UpdateAt < node.entry.UpdateAt) {
+				rank += curr.span[i]
+				curr = curr.next[i]
+			} else {
+				break
+			}
 		}
-		rank++
-		curr = curr.next[0]
+		if curr.next[i] == node {
+			rank += curr.span[i]
+			return rank
+		}
 	}
 	return -1
 }

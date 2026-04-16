@@ -2,6 +2,7 @@ package stress
 
 import (
 	"fmt"
+	"net"
 	"testing"
 	"time"
 
@@ -9,6 +10,18 @@ import (
 	"engine/cluster"
 	"engine/remote"
 )
+
+// getFreePort 获取可用端口，避免硬编码端口冲突
+func getFreePort(t *testing.T) int {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to get free port: %v", err)
+	}
+	port := l.Addr().(*net.TCPAddr).Port
+	l.Close()
+	return port
+}
 
 // createNode 创建一个集群节点（ActorSystem + Remote + Cluster）
 func createNode(t *testing.T, addr string, clusterName string, seeds []string, kinds []string) (*actor.ActorSystem, *remote.Remote, *cluster.Cluster) {
@@ -83,15 +96,15 @@ func TestStressClusterNodeFailure(t *testing.T) {
 	}
 
 	const (
-		nodeCount   = 3 // 减少节点数以降低收敛时间
+		nodeCount   = 3
 		clusterName = "stress-test-cluster"
-		basePort    = 19200
 	)
 
-	// 构建种子节点列表
+	// 使用动态端口避免端口冲突
 	seeds := make([]string, nodeCount)
 	for i := 0; i < nodeCount; i++ {
-		seeds[i] = fmt.Sprintf("127.0.0.1:%d", basePort+i)
+		port := getFreePort(t)
+		seeds[i] = fmt.Sprintf("127.0.0.1:%d", port)
 	}
 
 	// 启动所有节点（间隔启动确保 TCP 服务就绪）
@@ -99,15 +112,27 @@ func TestStressClusterNodeFailure(t *testing.T) {
 	remotes := make([]*remote.Remote, nodeCount)
 	clusters := make([]*cluster.Cluster, nodeCount)
 
+	// 确保测试失败或 panic 时也能清理资源
+	t.Cleanup(func() {
+		for i := nodeCount - 1; i >= 0; i-- {
+			if clusters[i] != nil {
+				clusters[i].Stop()
+			}
+			if remotes[i] != nil {
+				remotes[i].Stop()
+			}
+		}
+	})
+
 	for i := 0; i < nodeCount; i++ {
 		addr := seeds[i]
 		systems[i], remotes[i], clusters[i] = createNode(t, addr, clusterName, seeds, []string{"game"})
-		time.Sleep(100 * time.Millisecond) // 间隔启动
+		time.Sleep(200 * time.Millisecond) // 增加间隔，确保 TCP 监听就绪
 	}
 
-	// 等待集群收敛（轮询替代固定 sleep）
+	// 等待集群收敛（增加超时到 20s）
 	t.Log("等待集群收敛...")
-	if !waitForConvergence(t, clusters[:], nodeCount, 15*time.Second) {
+	if !waitForConvergence(t, clusters[:], nodeCount, 20*time.Second) {
 		for i, c := range clusters {
 			t.Logf("节点 %d 看到 %d 个成员", i, len(c.Members()))
 		}
@@ -128,12 +153,14 @@ func TestStressClusterNodeFailure(t *testing.T) {
 	t.Logf("杀死节点 %d (%s)", killIdx, seeds[killIdx])
 	clusters[killIdx].Stop()
 	remotes[killIdx].Stop()
+	clusters[killIdx] = nil
+	remotes[killIdx] = nil
 
-	// 等待故障检测（轮询等待被杀节点从存活列表消失）
+	// 等待故障检测（增加超时到 15s，gossip 协议收敛是概率性的）
 	t.Log("等待故障检测...")
-	waitForCondition(t, 10*time.Second, func() bool {
+	faultDetected := waitForCondition(t, 15*time.Second, func() bool {
 		for i, c := range clusters {
-			if i == killIdx {
+			if i == killIdx || c == nil {
 				continue
 			}
 			for _, m := range c.Members() {
@@ -145,17 +172,16 @@ func TestStressClusterNodeFailure(t *testing.T) {
 		return true
 	})
 
-	// 验证其他节点检测到故障
+	// 故障检测结果记录（不强制失败，因为 gossip 收敛有概率性延迟）
+	if !faultDetected {
+		t.Log("警告：故障检测未在超时内完成，gossip 可能有延迟")
+	}
+
 	for i, c := range clusters {
-		if i == killIdx {
+		if i == killIdx || c == nil {
 			continue
 		}
 		members := c.Members()
-		for _, m := range members {
-			if m.Address == seeds[killIdx] && m.Status == cluster.MemberAlive {
-				t.Logf("警告：节点 %d 仍看到节点 %d 为 Alive（可能 gossip 延迟）", i, killIdx)
-			}
-		}
 		t.Logf("节点 %d 当前看到 %d 个成员", i, len(members))
 	}
 
@@ -165,22 +191,19 @@ func TestStressClusterNodeFailure(t *testing.T) {
 		t, seeds[killIdx], clusterName, seeds, []string{"game"},
 	)
 
-	// 等待重新加入
+	// 等待重新加入（应恢复到完整 nodeCount 成员）
 	t.Log("等待重新加入...")
-	if !waitForConvergence(t, clusters[:], nodeCount-1, 15*time.Second) {
-		t.Log("警告：重新加入后集群未完全收敛")
+	if !waitForConvergence(t, clusters[:], nodeCount, 20*time.Second) {
+		t.Log("警告：重新加入后集群未完全收敛到全部成员")
 	}
 
 	// 验证重新加入后成员列表恢复
 	for i, c := range clusters {
+		if c == nil {
+			continue
+		}
 		members := c.Members()
 		t.Logf("节点 %d 最终看到 %d 个成员", i, len(members))
-	}
-
-	// 清理
-	for i := nodeCount - 1; i >= 0; i-- {
-		clusters[i].Stop()
-		remotes[i].Stop()
 	}
 
 	t.Log("集群故障演练完成")

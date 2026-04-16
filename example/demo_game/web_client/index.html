@@ -1,0 +1,519 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Guess Number - Web Client Demo</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: #0f0f23; color: #ccc; min-height: 100vh; }
+.app { max-width: 900px; margin: 0 auto; padding: 24px; }
+h1 { color: #00cc7a; text-align: center; font-size: 28px; margin-bottom: 8px; }
+.subtitle { text-align: center; color: #666; font-size: 14px; margin-bottom: 24px; }
+
+/* Panels */
+.panel { background: #1a1a2e; border: 1px solid #2a2a4a; border-radius: 12px; padding: 20px; margin-bottom: 16px; }
+.panel-title { color: #00cc7a; font-size: 16px; font-weight: 600; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
+
+/* Connection */
+.conn-bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.conn-bar input { flex: 1; min-width: 200px; padding: 10px 14px; background: #0f0f23; border: 1px solid #2a2a4a; border-radius: 6px; color: #ccc; font-size: 15px; outline: none; }
+.conn-bar input:focus { border-color: #00cc7a; }
+.conn-bar input.url { min-width: 280px; font-family: monospace; font-size: 13px; }
+.btn { padding: 10px 20px; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: 600; transition: all 0.2s; }
+.btn-primary { background: #00cc7a; color: #0f0f23; }
+.btn-primary:hover { background: #00ff99; }
+.btn-danger { background: #cc3333; color: #fff; }
+.btn-danger:hover { background: #ff4444; }
+.btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* Status indicator */
+.status-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+.status-dot.off { background: #555; }
+.status-dot.connecting { background: #f0ad4e; animation: pulse 1s infinite; }
+.status-dot.on { background: #00cc7a; }
+.status-dot.reconnecting { background: #f0ad4e; animation: pulse 0.5s infinite; }
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+.status-text { font-size: 13px; color: #888; }
+
+/* Game area */
+.game-info { display: flex; gap: 16px; margin-bottom: 16px; flex-wrap: wrap; }
+.info-card { flex: 1; min-width: 120px; background: #0f0f23; border-radius: 8px; padding: 12px; text-align: center; }
+.info-card .label { font-size: 11px; color: #666; text-transform: uppercase; letter-spacing: 1px; }
+.info-card .value { font-size: 24px; font-weight: 700; color: #00cc7a; margin-top: 4px; }
+.info-card .value.warn { color: #f0ad4e; }
+
+.guess-row { display: flex; gap: 8px; }
+.guess-row input { flex: 1; padding: 12px 14px; background: #0f0f23; border: 1px solid #2a2a4a; border-radius: 6px; color: #fff; font-size: 20px; text-align: center; outline: none; }
+.guess-row input:focus { border-color: #00cc7a; }
+
+/* Game log */
+.game-log { background: #0a0a18; border-radius: 6px; padding: 12px; max-height: 260px; overflow-y: auto; font-family: 'Menlo', 'Consolas', monospace; font-size: 13px; line-height: 1.8; margin-top: 12px; }
+.game-log::-webkit-scrollbar { width: 6px; }
+.game-log::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
+.log-sys { color: #5599ff; }
+.log-you { color: #00cc7a; }
+.log-opp { color: #f0ad4e; }
+.log-win { color: #ff66aa; font-weight: bold; }
+
+/* Leaderboard */
+.lb-table { width: 100%; border-collapse: collapse; }
+.lb-table th { background: #0f0f23; color: #00cc7a; text-align: left; padding: 10px 12px; font-size: 12px; text-transform: uppercase; letter-spacing: 1px; }
+.lb-table td { padding: 10px 12px; border-bottom: 1px solid #1a1a2e; font-size: 14px; }
+.lb-table tr:hover td { background: #16162e; }
+.rank-1 { color: #ffd700; font-weight: bold; }
+.rank-2 { color: #c0c0c0; font-weight: bold; }
+.rank-3 { color: #cd7f32; font-weight: bold; }
+
+/* Waiting overlay */
+.waiting { text-align: center; padding: 40px 20px; }
+.waiting .spinner { width: 40px; height: 40px; border: 3px solid #2a2a4a; border-top-color: #00cc7a; border-radius: 50%; animation: spin 0.8s linear infinite; margin: 0 auto 16px; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.waiting p { color: #888; font-size: 15px; }
+
+.hidden { display: none !important; }
+</style>
+</head>
+<body>
+<div class="app">
+  <h1>Guess Number Online</h1>
+  <p class="subtitle">Engine TypeScript SDK Demo &mdash; WebSocket Real-Time Game</p>
+
+  <!-- Connection Panel -->
+  <div class="panel">
+    <div class="panel-title">
+      <span class="status-dot off" id="statusDot"></span>
+      <span>Connection</span>
+      <span class="status-text" id="statusText">Disconnected</span>
+    </div>
+    <div class="conn-bar">
+      <input id="wsUrl" class="url" value="ws://localhost:8080/ws" placeholder="WebSocket URL">
+      <input id="playerName" placeholder="Your name" maxlength="20">
+      <button class="btn btn-primary" id="btnConnect" onclick="doConnect()">Connect</button>
+      <button class="btn btn-danger hidden" id="btnDisconnect" onclick="doDisconnect()">Disconnect</button>
+    </div>
+  </div>
+
+  <!-- Waiting for match -->
+  <div class="panel hidden" id="waitingPanel">
+    <div class="waiting">
+      <div class="spinner"></div>
+      <p>Searching for opponent...</p>
+    </div>
+  </div>
+
+  <!-- Game Panel -->
+  <div class="panel hidden" id="gamePanel">
+    <div class="panel-title">Game Room</div>
+    <div class="game-info">
+      <div class="info-card">
+        <div class="label">Range Low</div>
+        <div class="value" id="rangeLow">1</div>
+      </div>
+      <div class="info-card">
+        <div class="label">Range High</div>
+        <div class="value" id="rangeHigh">100</div>
+      </div>
+      <div class="info-card">
+        <div class="label">Round</div>
+        <div class="value" id="roundNum">1</div>
+      </div>
+      <div class="info-card">
+        <div class="label">Turn</div>
+        <div class="value" id="turnInfo">--</div>
+      </div>
+    </div>
+    <div class="guess-row">
+      <input id="guessInput" type="number" min="1" max="100" placeholder="Enter your guess (1-100)">
+      <button class="btn btn-primary" id="btnGuess" onclick="doGuess()" disabled>Guess</button>
+    </div>
+    <div class="game-log" id="gameLog"></div>
+  </div>
+
+  <!-- Leaderboard -->
+  <div class="panel">
+    <div class="panel-title">Leaderboard</div>
+    <table class="lb-table">
+      <thead><tr><th>#</th><th>Player</th><th>Score</th></tr></thead>
+      <tbody id="lbBody">
+        <tr><td colspan="3" style="color:#444;text-align:center">No data yet</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+// ============================================================
+// SDK Inline — GameClient + MessageRouter + JSONCodec
+// (In production, import from generated sdk.ts / sdk.js)
+// ============================================================
+
+class JSONCodec {
+  encode(type, msg) { return JSON.stringify({ type, ...msg }); }
+  decode(data) {
+    try {
+      const text = typeof data === 'string' ? data : new TextDecoder().decode(data);
+      const obj = JSON.parse(text);
+      if (!obj.type) return null;
+      const type = obj.type;
+      const payload = { ...obj };
+      delete payload.type;
+      return { type, payload };
+    } catch { return null; }
+  }
+}
+
+class MessageRouter {
+  constructor() { this._h = new Map(); this._w = new Set(); }
+  on(type, handler) {
+    if (!this._h.has(type)) this._h.set(type, new Set());
+    this._h.get(type).add(handler);
+    return () => this._h.get(type)?.delete(handler);
+  }
+  onAny(handler) { this._w.add(handler); return () => this._w.delete(handler); }
+  dispatch(type, msg) {
+    let ok = false;
+    const hs = this._h.get(type);
+    if (hs && hs.size > 0) { hs.forEach(h => h(msg)); ok = true; }
+    if (this._w.size > 0) { this._w.forEach(h => h(type, msg)); ok = true; }
+    return ok;
+  }
+  clear() { this._h.clear(); this._w.clear(); }
+}
+
+class GameClient {
+  constructor(options) {
+    this.opts = {
+      url: options.url,
+      reconnect: options.reconnect ?? true,
+      reconnectInterval: options.reconnectInterval ?? 3000,
+      maxReconnectAttempts: options.maxReconnectAttempts ?? 10,
+      heartbeatInterval: options.heartbeatInterval ?? 30000,
+    };
+    this.codec = new JSONCodec();
+    this.router = new MessageRouter();
+    this._state = 'disconnected';
+    this._stateListeners = new Set();
+    this._connectListeners = new Set();
+    this._disconnectListeners = new Set();
+    this._errorListeners = new Set();
+    this._ws = null;
+    this._closed = false;
+    this._reconnectAttempts = 0;
+    this._reconnectTimer = null;
+    this._heartbeatTimer = null;
+  }
+
+  get state() { return this._state; }
+  get connected() { return this._state === 'connected'; }
+
+  connect() {
+    this._closed = false;
+    this._setState('connecting');
+    return new Promise((resolve, reject) => {
+      try { this._ws = new WebSocket(this.opts.url); }
+      catch (e) { this._setState('disconnected'); reject(e); return; }
+
+      this._ws.onopen = () => {
+        this._reconnectAttempts = 0;
+        this._startHeartbeat();
+        this._ws.send(JSON.stringify({
+          type: '__handshake__', protocol_version: 1, client_sdk: 'ts-demo-1.0.0'
+        }));
+      };
+
+      let hsDone = false;
+      this._ws.onmessage = (ev) => {
+        if (!hsDone && typeof ev.data === 'string' && ev.data.includes('__handshake_ack__')) {
+          hsDone = true;
+          this._setState('connected');
+          this._connectListeners.forEach(h => h());
+          resolve();
+          return;
+        }
+        const decoded = this.codec.decode(ev.data);
+        if (decoded) this.router.dispatch(decoded.type, decoded.payload);
+      };
+
+      this._ws.onerror = (ev) => {
+        this._errorListeners.forEach(h => h(ev));
+        if (!hsDone) reject(ev);
+      };
+
+      this._ws.onclose = (ev) => {
+        this._stopHeartbeat();
+        this._disconnectListeners.forEach(h => h(ev.code, ev.reason));
+        if (!this._closed && this.opts.reconnect) this._tryReconnect();
+        else this._setState('disconnected');
+      };
+    });
+  }
+
+  disconnect() {
+    this._closed = true;
+    this._stopHeartbeat();
+    if (this._reconnectTimer) { clearTimeout(this._reconnectTimer); this._reconnectTimer = null; }
+    if (this._ws) { this._ws.close(1000, 'client disconnect'); this._ws = null; }
+    this._setState('disconnected');
+  }
+
+  send(type, msg) {
+    if (!this._ws || this._ws.readyState !== WebSocket.OPEN) return;
+    this._ws.send(this.codec.encode(type, msg));
+  }
+
+  onConnect(h) { this._connectListeners.add(h); return () => this._connectListeners.delete(h); }
+  onDisconnect(h) { this._disconnectListeners.add(h); return () => this._disconnectListeners.delete(h); }
+  onError(h) { this._errorListeners.add(h); return () => this._errorListeners.delete(h); }
+  onStateChange(h) { this._stateListeners.add(h); return () => this._stateListeners.delete(h); }
+
+  _setState(s) { if (this._state === s) return; this._state = s; this._stateListeners.forEach(h => h(s)); }
+  _tryReconnect() {
+    if (this.opts.maxReconnectAttempts > 0 && this._reconnectAttempts >= this.opts.maxReconnectAttempts) {
+      this._setState('disconnected'); return;
+    }
+    this._reconnectAttempts++;
+    this._setState('reconnecting');
+    this._reconnectTimer = setTimeout(() => this.connect().catch(() => {}), this.opts.reconnectInterval);
+  }
+  _startHeartbeat() {
+    if (this.opts.heartbeatInterval <= 0) return;
+    this._heartbeatTimer = setInterval(() => {
+      if (this._ws?.readyState === WebSocket.OPEN) this._ws.send(JSON.stringify({ type: '__ping__' }));
+    }, this.opts.heartbeatInterval);
+  }
+  _stopHeartbeat() { if (this._heartbeatTimer) { clearInterval(this._heartbeatTimer); this._heartbeatTimer = null; } }
+}
+
+// ============================================================
+// App State
+// ============================================================
+
+let client = null;
+let gameState = {
+  playerName: '',
+  inGame: false,
+  myTurn: false,
+  rangeLow: 1,
+  rangeHigh: 100,
+  round: 0,
+  leaderboard: [],
+};
+
+// ============================================================
+// UI Helpers
+// ============================================================
+
+const $ = (id) => document.getElementById(id);
+
+function updateConnectionUI(state) {
+  const dot = $('statusDot');
+  const text = $('statusText');
+  dot.className = 'status-dot ' + ({ disconnected: 'off', connecting: 'connecting', connected: 'on', reconnecting: 'reconnecting' }[state] || 'off');
+  text.textContent = { disconnected: 'Disconnected', connecting: 'Connecting...', connected: 'Connected', reconnecting: 'Reconnecting...' }[state] || state;
+
+  $('btnConnect').classList.toggle('hidden', state === 'connected');
+  $('btnDisconnect').classList.toggle('hidden', state !== 'connected');
+  $('wsUrl').disabled = state === 'connected';
+  $('playerName').disabled = state === 'connected';
+}
+
+function showPanel(id) {
+  ['waitingPanel', 'gamePanel'].forEach(p => $(p).classList.add('hidden'));
+  if (id) $(id).classList.remove('hidden');
+}
+
+function addLog(cls, text) {
+  const log = $('gameLog');
+  const ts = new Date().toLocaleTimeString();
+  const div = document.createElement('div');
+  div.className = 'log-' + cls;
+  div.textContent = '[' + ts + '] ' + text;
+  log.appendChild(div);
+  log.scrollTop = log.scrollHeight;
+}
+
+function updateGameInfo() {
+  $('rangeLow').textContent = gameState.rangeLow;
+  $('rangeHigh').textContent = gameState.rangeHigh;
+  $('roundNum').textContent = gameState.round;
+  const turn = $('turnInfo');
+  turn.textContent = gameState.myTurn ? 'YOU' : 'OPP';
+  turn.className = 'value' + (gameState.myTurn ? '' : ' warn');
+  $('btnGuess').disabled = !gameState.myTurn;
+}
+
+function updateLeaderboard(entries) {
+  const tbody = $('lbBody');
+  if (!entries || entries.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="3" style="color:#444;text-align:center">No data yet</td></tr>';
+    return;
+  }
+  tbody.innerHTML = entries.map((e, i) => {
+    const rc = i < 3 ? ' class="rank-' + (i + 1) + '"' : '';
+    return '<tr><td' + rc + '>' + e.rank + '</td><td>' + e.player_id + '</td><td>' + e.score + '</td></tr>';
+  }).join('');
+}
+
+// ============================================================
+// Connection & Game Logic
+// ============================================================
+
+function doConnect() {
+  const name = $('playerName').value.trim();
+  const url = $('wsUrl').value.trim();
+  if (!name) { $('playerName').focus(); return; }
+  if (!url) { $('wsUrl').focus(); return; }
+
+  gameState.playerName = name;
+
+  client = new GameClient({
+    url: url,
+    reconnect: true,
+    maxReconnectAttempts: 5,
+    heartbeatInterval: 30000,
+  });
+
+  // State change listener
+  client.onStateChange(updateConnectionUI);
+
+  // Connection events
+  client.onConnect(() => {
+    addLog('sys', 'Connected to server');
+    // Send join match request
+    client.send('JoinMatchRequest', { player_id: name });
+    showPanel('waitingPanel');
+  });
+
+  client.onDisconnect((code, reason) => {
+    addLog('sys', 'Disconnected: ' + code + ' ' + (reason || ''));
+    gameState.inGame = false;
+    showPanel(null);
+  });
+
+  client.onError((err) => {
+    addLog('sys', 'Connection error');
+  });
+
+  // --- Register message handlers ---
+
+  client.router.on('MatchFoundNotify', (msg) => {
+    addLog('sys', 'Matched with opponent: ' + msg.opponent_id);
+    showPanel('gamePanel');
+  });
+
+  client.router.on('GameStartNotify', (msg) => {
+    gameState.inGame = true;
+    gameState.myTurn = msg.your_turn;
+    gameState.rangeLow = 1;
+    gameState.rangeHigh = 100;
+    gameState.round = 1;
+    addLog('sys', 'Game started! Players: ' + msg.players.join(' vs '));
+    addLog('sys', msg.target_hint);
+    if (msg.your_turn) addLog('sys', 'Your turn first!');
+    else addLog('sys', 'Opponent goes first, please wait...');
+    updateGameInfo();
+    $('guessInput').value = '';
+    if (msg.your_turn) $('guessInput').focus();
+  });
+
+  client.router.on('GuessResultNotify', (msg) => {
+    const isMe = msg.player_id === gameState.playerName;
+    const cls = isMe ? 'you' : 'opp';
+    const who = isMe ? 'You' : msg.player_id;
+    const resultText = { too_low: 'Too Low', too_high: 'Too High', correct: 'CORRECT!' }[msg.result] || msg.result;
+    addLog(cls, who + ' guessed ' + msg.number + ' -> ' + resultText);
+
+    // Update range hints
+    if (msg.result === 'too_low' && msg.number >= gameState.rangeLow) {
+      gameState.rangeLow = msg.number + 1;
+    } else if (msg.result === 'too_high' && msg.number <= gameState.rangeHigh) {
+      gameState.rangeHigh = msg.number - 1;
+    }
+    updateGameInfo();
+  });
+
+  client.router.on('TurnNotify', (msg) => {
+    gameState.myTurn = true;
+    gameState.round = msg.round;
+    addLog('sys', 'Your turn! Round ' + msg.round);
+    updateGameInfo();
+    $('guessInput').focus();
+  });
+
+  client.router.on('TimeoutNotify', (msg) => {
+    const isMe = msg.player_id === gameState.playerName;
+    addLog('sys', (isMe ? 'You' : msg.player_id) + ' timed out in round ' + msg.round);
+    if (isMe) gameState.myTurn = false;
+    updateGameInfo();
+  });
+
+  client.router.on('GameOverNotify', (msg) => {
+    const isWinner = msg.winner_id === gameState.playerName;
+    addLog('win', 'Game Over! Winner: ' + msg.winner_id +
+      ' | Target: ' + msg.target_num +
+      ' | Score: ' + msg.score +
+      ' | Guesses: ' + msg.total_guess);
+    if (isWinner) addLog('you', 'Congratulations, you won!');
+    else addLog('opp', 'Better luck next time!');
+    gameState.inGame = false;
+    gameState.myTurn = false;
+    updateGameInfo();
+  });
+
+  client.router.on('ScoreUpdateNotify', (msg) => {
+    addLog('sys', msg.player_id + ' score: ' + msg.score + ' (rank #' + msg.rank + ')');
+  });
+
+  client.router.on('LeaderboardNotify', (msg) => {
+    gameState.leaderboard = msg.entries || [];
+    updateLeaderboard(gameState.leaderboard);
+  });
+
+  // Debug: log all unhandled messages
+  client.router.onAny((type, msg) => {
+    if (type.startsWith('__')) return; // skip internal
+    console.log('[MSG]', type, msg);
+  });
+
+  // Connect
+  client.connect().catch((err) => {
+    console.error('Connect failed:', err);
+    updateConnectionUI('disconnected');
+  });
+}
+
+function doDisconnect() {
+  if (client) {
+    client.disconnect();
+    client = null;
+  }
+  gameState.inGame = false;
+  showPanel(null);
+  updateConnectionUI('disconnected');
+}
+
+function doGuess() {
+  if (!client || !client.connected || !gameState.myTurn) return;
+  const input = $('guessInput');
+  const num = parseInt(input.value);
+  if (isNaN(num) || num < 1 || num > 100) {
+    input.style.borderColor = '#cc3333';
+    setTimeout(() => input.style.borderColor = '', 1000);
+    return;
+  }
+  input.value = '';
+  gameState.myTurn = false;
+  updateGameInfo();
+  client.send('GuessRequest', { number: num });
+}
+
+// Enter key handlers
+document.addEventListener('DOMContentLoaded', () => {
+  $('guessInput').addEventListener('keypress', (e) => { if (e.key === 'Enter') doGuess(); });
+  $('playerName').addEventListener('keypress', (e) => { if (e.key === 'Enter') doConnect(); });
+  $('wsUrl').addEventListener('keypress', (e) => { if (e.key === 'Enter') doConnect(); });
+});
+</script>
+</body>
+</html>
