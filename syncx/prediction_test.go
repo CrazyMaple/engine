@@ -122,6 +122,79 @@ func TestPredictionClient_MaxPredictionFrames(t *testing.T) {
 	}
 }
 
+func TestPredictionClient_LerpCorrection(t *testing.T) {
+	config := DefaultPredictionConfig()
+	config.CorrectionMode = CorrectionLerp
+	config.LerpFrames = 4
+	config.SmoothCorrection = true
+	pc := NewPredictionClient("p1", config, testPredictFn, nil, 20)
+	pc.displayState = map[string]interface{}{"x": 0.0}
+
+	// 服务端权威 x=10，无待确认输入，但启用 Lerp 模式
+	result := pc.ReconcileServerState(1, map[string]interface{}{"x": 10.0})
+	x := result["x"].(float64)
+	if x != 0.0 {
+		t.Fatalf("after Reconcile, displayState should not jump: x=%v", x)
+	}
+
+	// Tick 4 次应到达目标
+	for i := 1; i <= 4; i++ {
+		pc.Tick()
+	}
+	if pc.DisplayState()["x"].(float64) != 10.0 {
+		t.Fatalf("after %d ticks, expected x=10.0, got %v", 4, pc.DisplayState()["x"])
+	}
+
+	// 中间帧应在 (0, 10) 之间
+	pc.displayState = map[string]interface{}{"x": 0.0}
+	pc.corrections = map[string]correction{}
+	pc.ReconcileServerState(1, map[string]interface{}{"x": 10.0})
+	pc.Tick() // 1/4 = 2.5
+	mid := pc.DisplayState()["x"].(float64)
+	if mid <= 0.0 || mid >= 10.0 {
+		t.Fatalf("intermediate Lerp value out of range: %v", mid)
+	}
+}
+
+func TestPredictionClient_SpringCorrection(t *testing.T) {
+	config := DefaultPredictionConfig()
+	config.CorrectionMode = CorrectionSpring
+	config.SpringStiffness = 0.5
+	config.SpringDamping = 0.5
+	pc := NewPredictionClient("p1", config, testPredictFn, nil, 20)
+	pc.displayState = map[string]interface{}{"x": 0.0}
+
+	pc.ReconcileServerState(1, map[string]interface{}{"x": 10.0})
+	if pc.DisplayState()["x"].(float64) != 0.0 {
+		t.Fatal("Spring 模式不应在 Reconcile 后立即跳变")
+	}
+
+	// 多次 Tick 应收敛到目标值附近
+	for i := 0; i < 200; i++ {
+		pc.Tick()
+		if len(pc.corrections) == 0 {
+			break
+		}
+	}
+	final := pc.DisplayState()["x"].(float64)
+	if final < 9.99 || final > 10.01 {
+		t.Fatalf("Spring 未收敛到目标值：x=%v", final)
+	}
+}
+
+func TestPredictionClient_InstantModeStillWorks(t *testing.T) {
+	config := DefaultPredictionConfig()
+	config.CorrectionMode = CorrectionInstant
+	config.SmoothCorrection = false
+	pc := NewPredictionClient("p1", config, testPredictFn, nil, 20)
+	pc.displayState = map[string]interface{}{"x": 0.0}
+
+	result := pc.ReconcileServerState(1, map[string]interface{}{"x": 10.0})
+	if result["x"].(float64) != 10.0 {
+		t.Fatalf("Instant 模式应立即跳到 10.0，得到 %v", result["x"])
+	}
+}
+
 // --- Rollback 测试 ---
 
 func testSimulateFn(state map[string]interface{}, inputs []PlayerInput) map[string]interface{} {

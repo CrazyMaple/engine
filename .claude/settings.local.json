@@ -40,7 +40,20 @@
       "Bash(go get *)",
       "Bash(head *)",
       "Bash(go list *)",
-      "Bash(go run *)"
+      "Bash(go run *)",
+      "Bash(git stash *)",
+      "Bash(command -v claude)",
+      "Bash(npm ls *)",
+      "Read(//usr/local/n/**)",
+      "Read(//usr/local/n/versions/node/24.11.1/lib/node_modules/@anthropic-ai/claude-code/bin/**)",
+      "Bash(ln -sf /usr/local/n/versions/node/24.11.1/lib/node_modules/@anthropic-ai/claude-code/bin/claude.exe /usr/local/n/versions/node/24.11.1/bin/claude)",
+      "Bash(rm -f /usr/local/n/versions/node/24.11.1/bin/claude-code)",
+      "Bash(bash -n /root/claude-chinese.sh)",
+      "Bash(node install.cjs)",
+      "Bash(npm install *)",
+      "Bash(node /usr/local/n/versions/node/24.11.1/lib/node_modules/@anthropic-ai/claude-code/install.cjs)",
+      "Bash(node -e \"console.log\\(require\\('/usr/local/n/versions/node/24.11.1/lib/node_modules/@anthropic-ai/claude-code/package.json'\\).version\\)\")",
+      "Bash(npm view *)"
     ],
     "additionalDirectories": [
       "e:\\workspace\\qm\\qmserver\\.claude\\docs\\output\\funcdesc",

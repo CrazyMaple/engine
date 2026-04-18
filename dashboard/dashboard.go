@@ -60,6 +60,16 @@ type Config struct {
 	CanaryRuleEngine *canary.RuleEngine
 	// ABTestManager A/B 测试管理器（可选，支持实验创建和变体分配）
 	ABTestManager *canary.ABTestManager
+	// LogRingBuffer 日志环形缓冲（可选，启用 /api/log/query 接口）
+	LogRingBuffer *log.RingBufferSink
+	// AlertManager 告警管理器（可选，启用 /api/alerts 接口）
+	AlertManager *AlertManager
+	// ReplayDir 回放文件根目录（可选，启用 /api/replay 接口）
+	ReplayDir string
+	// ChainedAudit 哈希链审计日志（可选，启用 /api/audit/chained/* 接口）
+	ChainedAudit *ChainedAuditLog
+	// ConfirmationMgr 高危操作二次确认码管理器（可选，启用 /api/audit/confirm/* 接口）
+	ConfirmationMgr *ConfirmationManager
 }
 
 // Dashboard Web 管理面板
@@ -239,5 +249,40 @@ func (d *Dashboard) registerRoutes(mux *http.ServeMux) {
 	// 健康检查端点（与 Dashboard 复用端口）
 	if d.config.HealthChecker != nil {
 		RegisterHealthRoutes(mux, d.config.HealthChecker)
+	}
+
+	// 日志查询端点
+	if d.config.LogRingBuffer != nil {
+		mux.HandleFunc("/api/log/query", h.handleLogQuery)
+		mux.HandleFunc("/api/log/stats", h.handleLogStats)
+	}
+
+	// 告警端点
+	if d.config.AlertManager != nil {
+		mux.HandleFunc("/api/alerts/rules", h.handleAlertRules)
+		mux.HandleFunc("/api/alerts/active", h.handleAlertActive)
+		mux.HandleFunc("/api/alerts/history", h.handleAlertHistory)
+		mux.HandleFunc("/api/alerts/silence", h.handleAlertSilence)
+		mux.HandleFunc("/api/alerts/ack", h.handleAlertAck)
+	}
+
+	// 拓扑交互端点（依赖集群已配置）
+	if d.config.Cluster != nil {
+		mux.HandleFunc("/api/topology/node", h.handleTopologyNode)
+		mux.HandleFunc("/api/topology/migrate", h.handleTopologyMigrate)
+		mux.HandleFunc("/api/topology/drain", h.handleTopologyDrain)
+	}
+
+	// 回放管理端点
+	if d.config.ReplayDir != "" {
+		mux.HandleFunc("/api/replay/list", h.handleReplayList)
+		mux.HandleFunc("/api/replay/get", h.handleReplayGet)
+		mux.HandleFunc("/api/replay/delete", h.handleReplayDelete)
+	}
+
+	// 审计合规增强端点（哈希链 + 导出 + 二次确认）
+	if d.config.ChainedAudit != nil || d.config.ConfirmationMgr != nil {
+		aeh := NewAuditEnhancedHandlers(d.config.ChainedAudit, d.config.ConfirmationMgr)
+		aeh.RegisterRoutes(mux)
 	}
 }

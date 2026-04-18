@@ -2,6 +2,18 @@ package syncx
 
 import "time"
 
+// CorrectionMode 客户端预测校正模式
+type CorrectionMode int
+
+const (
+	// CorrectionInstant 瞬间校正：直接采用服务端权威值
+	CorrectionInstant CorrectionMode = iota
+	// CorrectionLerp 线性插值校正：在 LerpFrames 帧内逐帧线性趋近目标
+	CorrectionLerp
+	// CorrectionSpring 弹簧阻尼校正：通过物理模拟带来更"软"的视觉过渡
+	CorrectionSpring
+)
+
 // PredictionConfig 客户端预测配置
 type PredictionConfig struct {
 	// MaxPredictionFrames 最大预测帧数（超过此帧数的预测将被丢弃）
@@ -10,9 +22,20 @@ type PredictionConfig struct {
 	// 差异以 state key 数量衡量
 	ReconcileThreshold int
 	// SmoothCorrection 是否启用平滑校正（否则瞬间跳变）
+	// 兼容字段：当 CorrectionMode == CorrectionInstant 且 SmoothCorrection=true 时
+	// 自动升级为 CorrectionLerp。
 	SmoothCorrection bool
-	// CorrectionRate 每帧校正比例 (0,1]，1.0 = 瞬间校正
+	// CorrectionRate 每帧校正比例 (0,1]，1.0 = 瞬间校正（旧 Lerp 接口保留）
 	CorrectionRate float64
+
+	// CorrectionMode 校正模式（v1.10 引入）
+	CorrectionMode CorrectionMode
+	// LerpFrames Lerp 模式下完成校正所需帧数（>=1）
+	LerpFrames int
+	// SpringStiffness 弹簧刚度 (0,1]，越大越快到达目标
+	SpringStiffness float64
+	// SpringDamping 阻尼系数 [0,1]，越大震荡越小
+	SpringDamping float64
 }
 
 // DefaultPredictionConfig 默认预测配置
@@ -22,6 +45,10 @@ func DefaultPredictionConfig() PredictionConfig {
 		ReconcileThreshold:  0, // 任何差异都校正
 		SmoothCorrection:    true,
 		CorrectionRate:      0.3,
+		CorrectionMode:      CorrectionInstant,
+		LerpFrames:          5,
+		SpringStiffness:     0.3,
+		SpringDamping:       0.6,
 	}
 }
 
@@ -56,8 +83,13 @@ type pendingInput struct {
 }
 
 type correction struct {
-	target interface{} // 目标值
-	rate   float64     // 校正速率
+	target   interface{}    // 目标值
+	start    interface{}    // 起始值（Lerp/Spring 用）
+	mode     CorrectionMode // 校正模式
+	rate     float64        // CorrectionInstant/Lerp 用：每帧前进比例
+	elapsed  int            // 已经过帧数
+	duration int            // Lerp 总帧数
+	velocity float64        // Spring 模式下的当前速度（仅 float64 字段有效）
 }
 
 // NewPredictionClient 创建客户端预测管理器
@@ -124,32 +156,149 @@ func (pc *PredictionClient) ReconcileServerState(serverFrame uint64, serverState
 	diffCount := pc.countDiffs(pc.displayState, reconciledState)
 
 	if diffCount > pc.config.ReconcileThreshold {
-		if pc.config.SmoothCorrection {
-			// 记录校正残差，后续逐帧平滑
+		mode := pc.effectiveMode()
+		if mode != CorrectionInstant {
+			// 记录校正残差：start 取当前显示值，target 取权威值
 			for k, v := range reconciledState {
-				if pc.displayState[k] != v {
-					pc.corrections[k] = correction{target: v, rate: pc.config.CorrectionRate}
+				cur, exists := pc.displayState[k]
+				if !exists {
+					// 新键无起点可插值，直接采用权威值
+					pc.displayState[k] = v
+					continue
+				}
+				if cur != v {
+					pc.corrections[k] = correction{
+						target:   v,
+						start:    cur,
+						mode:     mode,
+						rate:     pc.config.CorrectionRate,
+						duration: pc.config.LerpFrames,
+					}
 				}
 			}
-		} else {
-			// 瞬间跳变到正确状态
-			pc.displayState = reconciledState
+			// 删除权威状态中不再存在的字段
+			for k := range pc.displayState {
+				if _, ok := reconciledState[k]; !ok {
+					delete(pc.displayState, k)
+				}
+			}
+			// Spring/Lerp 模式：保留 displayState，由 Tick() 逐帧推进
+			return pc.copyState(pc.displayState)
 		}
 	}
 
-	// 更新权威部分
+	// CorrectionInstant 或没有显著差异 → 直接采用权威状态
 	pc.displayState = reconciledState
-
+	pc.corrections = make(map[string]correction)
 	return pc.copyState(pc.displayState)
 }
 
 // Tick 每帧更新（处理平滑校正）
 func (pc *PredictionClient) Tick() {
-	// 清理已完成的校正
-	for k, c := range pc.corrections {
-		pc.displayState[k] = c.target
-		delete(pc.corrections, k)
+	if len(pc.corrections) == 0 {
+		return
 	}
+	for k, c := range pc.corrections {
+		next, done := stepCorrection(c, pc.config)
+		pc.corrections[k] = next
+		pc.displayState[k] = next.start // start 字段在 step 中被刷新为当前插值
+		if done {
+			pc.displayState[k] = c.target
+			delete(pc.corrections, k)
+		}
+	}
+}
+
+// stepCorrection 推进单个校正一步；返回新状态及是否完成
+func stepCorrection(c correction, cfg PredictionConfig) (correction, bool) {
+	switch c.mode {
+	case CorrectionLerp:
+		c.elapsed++
+		duration := c.duration
+		if duration <= 0 {
+			duration = 1
+		}
+		if c.elapsed >= duration {
+			c.start = c.target
+			return c, true
+		}
+		// 仅对 float64 做线性插值；其他类型在最后一帧切换
+		sf, sok := toFloat(c.start)
+		tf, tok := toFloat(c.target)
+		if sok && tok {
+			t := float64(c.elapsed) / float64(duration)
+			c.start = sf + (tf-sf)*t
+			return c, false
+		}
+		return c, false
+	case CorrectionSpring:
+		sf, sok := toFloat(c.start)
+		tf, tok := toFloat(c.target)
+		if !sok || !tok {
+			// 非数值字段：一次性赋值
+			c.start = c.target
+			return c, true
+		}
+		stiffness := cfg.SpringStiffness
+		damping := cfg.SpringDamping
+		if stiffness <= 0 {
+			stiffness = 0.3
+		}
+		if damping < 0 {
+			damping = 0
+		}
+		if damping > 1 {
+			damping = 1
+		}
+		// 简化弹簧物理：accel = stiffness*(target-pos); v = (v+accel)*(1-damping)
+		accel := stiffness * (tf - sf)
+		c.velocity = (c.velocity + accel) * (1 - damping)
+		newPos := sf + c.velocity
+		c.start = newPos
+		// 收敛判定：位移和速度都足够小
+		if absFloat(tf-newPos) < 0.001 && absFloat(c.velocity) < 0.001 {
+			c.start = c.target
+			return c, true
+		}
+		return c, false
+	default: // CorrectionInstant：理论上不应进入 Tick，兜底直接到达
+		c.start = c.target
+		return c, true
+	}
+}
+
+func toFloat(v interface{}) (float64, bool) {
+	switch x := v.(type) {
+	case float64:
+		return x, true
+	case float32:
+		return float64(x), true
+	case int:
+		return float64(x), true
+	case int64:
+		return float64(x), true
+	case int32:
+		return float64(x), true
+	}
+	return 0, false
+}
+
+func absFloat(v float64) float64 {
+	if v < 0 {
+		return -v
+	}
+	return v
+}
+
+// effectiveMode 根据兼容字段推断真正使用的校正模式
+func (pc *PredictionClient) effectiveMode() CorrectionMode {
+	if pc.config.CorrectionMode != CorrectionInstant {
+		return pc.config.CorrectionMode
+	}
+	if pc.config.SmoothCorrection {
+		return CorrectionLerp
+	}
+	return CorrectionInstant
 }
 
 // PendingCount 返回待确认的预测输入数量

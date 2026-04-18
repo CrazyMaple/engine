@@ -25,6 +25,7 @@ type Endpoint struct {
 	mu            sync.RWMutex
 	signer        *MessageSigner     // 可选的消息签名器
 	tlsCfg        *network.TLSConfig // 可选的 TLS 配置
+	cipher        MessageCipher      // 可选的消息加密器
 	codec         *RemoteCodec       // 编解码器
 	healthChk     *healthChecker     // 可选的健康检查器
 	retryQ        *retryQueue        // 可选的消息重发队列
@@ -178,6 +179,16 @@ func (ep *Endpoint) sendBatch(batch []*RemoteMessage) {
 		return
 	}
 
+	// 如果启用消息加密，先加密再签名（签名保护密文完整性）
+	if ep.cipher != nil {
+		encrypted, cerr := ep.cipher.Encrypt(data)
+		if cerr != nil {
+			log.Error("Encrypt batch error: %v", cerr)
+			return
+		}
+		data = encrypted
+	}
+
 	// 如果启用签名，追加 HMAC 签名
 	if ep.signer != nil {
 		sig := ep.signer.Sign(data)
@@ -205,6 +216,16 @@ func (ep *Endpoint) sendMessage(msg *RemoteMessage) {
 	if err != nil {
 		log.Error("Marshal message error: %v", err)
 		return
+	}
+
+	// 如果启用消息加密，先加密再签名
+	if ep.cipher != nil {
+		encrypted, cerr := ep.cipher.Encrypt(data)
+		if cerr != nil {
+			log.Error("Encrypt message error: %v", cerr)
+			return
+		}
+		data = encrypted
 	}
 
 	// 如果启用签名，追加 HMAC 签名（32 字节 SHA256）
@@ -279,6 +300,7 @@ type EndpointManager struct {
 	mu        sync.RWMutex
 	signer    *MessageSigner     // 可选的消息签名器
 	tlsCfg    *network.TLSConfig // 可选的 TLS 配置
+	cipher    MessageCipher      // 可选的消息加密器
 	codec     *RemoteCodec       // 编解码器
 }
 
@@ -312,6 +334,7 @@ func (em *EndpointManager) GetEndpoint(address string) *Endpoint {
 	ep = NewEndpoint(address)
 	ep.signer = em.signer
 	ep.tlsCfg = em.tlsCfg
+	ep.cipher = em.cipher
 	ep.codec = em.codec
 	ep.Start()
 	em.endpoints[address] = ep

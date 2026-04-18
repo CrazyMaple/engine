@@ -53,6 +53,9 @@ type SyncConfig struct {
 	InputBufferSize int
 	// SnapshotInterval 状态快照间隔帧数（状态同步）
 	SnapshotInterval int
+	// EnableDeltaCompression 启用增量状态压缩（v1.10）
+	// 启用后 StateSyncRoom 会使用 DeltaEncoder 进行字段级差分广播
+	EnableDeltaCompression bool
 }
 
 // DefaultSyncConfig 返回默认同步配置

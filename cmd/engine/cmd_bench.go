@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	enginebench "engine/bench"
 )
 
 func cmdBench(args []string) error {
@@ -17,6 +19,11 @@ func cmdBench(args []string) error {
 	pkg := fs.String("pkg", "./...", "测试包路径模式")
 	count := fs.Int("count", 1, "基准测试运行次数")
 	output := fs.String("output", "", "报告输出文件（空则输出到终端）")
+	baseline := fs.String("baseline", "", "基线 JSON 文件路径（指定后启用回归对比）")
+	updateBaseline := fs.Bool("update-baseline", false, "用本次结果更新基线（保留旧值到 history）")
+	htmlOut := fs.String("html", "", "HTML 报告输出路径（需配合 -baseline）")
+	failOnRegress := fs.Bool("fail-on-regress", false, "存在 major 级别回归时以非 0 退出码结束")
+	commit := fs.String("commit", "", "记录到基线的 commit SHA（可选）")
 	fs.Parse(args)
 
 	fmt.Printf("运行基准测试: %s (count=%d)\n", *pkg, *count)
@@ -43,6 +50,41 @@ func cmdBench(args []string) error {
 		fmt.Printf("报告已保存: %s\n", *output)
 	} else {
 		fmt.Println(report)
+	}
+
+	// 基线对比 / 更新路径
+	if *baseline != "" {
+		structured, err := enginebench.ParseBenchOutput(strings.NewReader(string(out)))
+		if err != nil {
+			return fmt.Errorf("解析基准输出失败: %w", err)
+		}
+		store := enginebench.NewBaselineStore(*baseline)
+		baseData, err := store.Load()
+		if err != nil {
+			return fmt.Errorf("加载基线失败: %w", err)
+		}
+
+		report := enginebench.Compare(baseData, structured, enginebench.DefaultThresholds())
+		fmt.Println(report.TextSummary())
+
+		if *htmlOut != "" {
+			if err := os.WriteFile(*htmlOut, enginebench.HTMLReport(report, baseData), 0644); err != nil {
+				return fmt.Errorf("写入 HTML 报告失败: %w", err)
+			}
+			fmt.Printf("HTML 报告已保存: %s\n", *htmlOut)
+		}
+
+		if *updateBaseline {
+			store.Update(structured, *commit)
+			if err := store.Save(); err != nil {
+				return fmt.Errorf("保存基线失败: %w", err)
+			}
+			fmt.Printf("基线已更新: %s\n", *baseline)
+		}
+
+		if *failOnRegress && report.HasRegression() {
+			return fmt.Errorf("检测到 %d 项 major 级回归", report.MajorCount)
+		}
 	}
 
 	return nil

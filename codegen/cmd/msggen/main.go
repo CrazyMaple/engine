@@ -22,6 +22,10 @@ func main() {
 	registryOutput := flag.String("registry", "", "可选：TypeRegistry 注册代码输出路径")
 	sdkV2Output := flag.String("sdk-v2", "", "可选：增强版 TypeScript SDK（消息路由器 + Protobuf 支持）")
 	unityPkg := flag.String("unity-pkg", "", "可选：Unity Package 输出目录（生成可直接导入的 Unity Package 结构）")
+	tsProtoSDK := flag.String("ts-proto-sdk", "", "可选：TypeScript Protobuf SDK 输出路径（基于 protobuf.js 的 TypeRegistry + Adapter）")
+	csProtoSDK := flag.String("cs-proto-sdk", "", "可选：C# Protobuf SDK 输出路径（基于 Google.Protobuf 的 TypeRegistry + Adapter）")
+	protoRegistryGo := flag.String("proto-registry", "", "可选：Proto 消息 ID 常量表 Go 源文件输出路径（服务端与客户端共享 ID）")
+	protoExampleDir := flag.String("proto-example", "", "可选：生成 Protobuf 示例项目目录（TypeScript + Unity 骨架）")
 	flag.Parse()
 
 	if *input == "" && *proto == "" {
@@ -159,6 +163,57 @@ func main() {
 		fmt.Printf("Unity Package 已生成: %s\n", *unityPkg)
 	}
 
+	// 生成 TypeScript Protobuf SDK
+	if *tsProtoSDK != "" {
+		code, err := codegen.GenerateTSProtoSDK(msgs)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "生成 TypeScript Protobuf SDK 失败: %v\n", err)
+			os.Exit(1)
+		}
+		if err := os.WriteFile(*tsProtoSDK, code, 0644); err != nil {
+			fmt.Fprintf(os.Stderr, "写入文件失败: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("TypeScript Protobuf SDK 已生成: %s\n", *tsProtoSDK)
+	}
+
+	// 生成 C# Protobuf SDK
+	if *csProtoSDK != "" {
+		code, err := codegen.GenerateCSharpProtoSDK(msgs, *csNamespace)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "生成 C# Protobuf SDK 失败: %v\n", err)
+			os.Exit(1)
+		}
+		if err := os.WriteFile(*csProtoSDK, code, 0644); err != nil {
+			fmt.Fprintf(os.Stderr, "写入文件失败: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("C# Protobuf SDK 已生成: %s\n", *csProtoSDK)
+	}
+
+	// 生成 Proto 消息 ID 常量表（服务端与客户端共享）
+	if *protoRegistryGo != "" {
+		code, err := codegen.GenerateProtoRegistryGo(msgs, *pkg)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "生成 Proto 常量表失败: %v\n", err)
+			os.Exit(1)
+		}
+		if err := os.WriteFile(*protoRegistryGo, code, 0644); err != nil {
+			fmt.Fprintf(os.Stderr, "写入文件失败: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("Proto 常量表已生成: %s\n", *protoRegistryGo)
+	}
+
+	// 生成 Protobuf 示例项目骨架
+	if *protoExampleDir != "" {
+		if err := generateProtoExamples(msgs, *protoExampleDir, *csNamespace); err != nil {
+			fmt.Fprintf(os.Stderr, "生成 Protobuf 示例项目失败: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("Protobuf 示例项目已生成: %s\n", *protoExampleDir)
+	}
+
 	// 生成 TypeRegistry 注册代码
 	if *registryOutput != "" {
 		code, err := codegen.GenerateTypeRegistry(msgs, *pkg)
@@ -239,6 +294,74 @@ func generateUnityPackage(msgs []codegen.MessageDef, dir, namespace string) erro
 }
 `, namespace, namespace, namespace)
 	if err := os.WriteFile(dir+"/Editor/"+namespace+".Editor.asmdef", []byte(editorAsmdef), 0644); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// generateProtoExamples 生成 Protobuf 示例项目骨架（TypeScript + Unity）
+// 目录结构:
+//   <dir>/typescript/
+//     ├── proto_sdk.ts           # Protobuf SDK
+//     ├── main.ts                # 示例入口
+//     └── package.json           # npm 清单
+//   <dir>/unity/
+//     ├── ProtoTypeRegistry.cs   # C# Protobuf SDK
+//     └── ProtobufClientExample.cs
+func generateProtoExamples(msgs []codegen.MessageDef, dir, namespace string) error {
+	tsDir := dir + "/typescript"
+	unityDir := dir + "/unity"
+	for _, d := range []string{dir, tsDir, unityDir} {
+		if err := os.MkdirAll(d, 0755); err != nil {
+			return fmt.Errorf("mkdir %s: %w", d, err)
+		}
+	}
+
+	// TypeScript SDK
+	tsSDK, err := codegen.GenerateTSProtoSDK(msgs)
+	if err != nil {
+		return fmt.Errorf("generate ts proto sdk: %w", err)
+	}
+	if err := os.WriteFile(tsDir+"/proto_sdk.ts", tsSDK, 0644); err != nil {
+		return err
+	}
+	// TypeScript 示例入口
+	if err := os.WriteFile(tsDir+"/main.ts", codegen.GenerateTSProtoExample(), 0644); err != nil {
+		return err
+	}
+	// package.json
+	tsPkg := `{
+  "name": "engine-proto-client-example",
+  "version": "1.0.0",
+  "description": "Engine Protobuf client SDK example",
+  "type": "module",
+  "dependencies": {
+    "protobufjs": "^7.2.5"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0"
+  }
+}
+`
+	if err := os.WriteFile(tsDir+"/package.json", []byte(tsPkg), 0644); err != nil {
+		return err
+	}
+
+	// Unity C# Protobuf SDK
+	csSDK, err := codegen.GenerateCSharpProtoSDK(msgs, namespace)
+	if err != nil {
+		return fmt.Errorf("generate cs proto sdk: %w", err)
+	}
+	if err := os.WriteFile(unityDir+"/ProtoTypeRegistry.cs", csSDK, 0644); err != nil {
+		return err
+	}
+	// Unity 示例 MonoBehaviour
+	unityExample, err := codegen.GenerateUnityProtoExample(namespace)
+	if err != nil {
+		return fmt.Errorf("generate unity example: %w", err)
+	}
+	if err := os.WriteFile(unityDir+"/ProtobufClientExample.cs", unityExample, 0644); err != nil {
 		return err
 	}
 

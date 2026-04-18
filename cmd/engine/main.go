@@ -14,6 +14,7 @@ var commands = map[string]func(args []string) error{
 	"plugin":    cmdPlugin,
 	"cluster":   cmdCluster,
 	"migrate":   cmdMigrate,
+	"audit":     cmdAudit,
 }
 
 func main() {
@@ -50,6 +51,7 @@ func printUsage() {
   plugin      插件管理（install/remove/list/info）
   cluster     集群状态查看（status/nodes/health）
   migrate     Actor 迁移管理（actor/drain/status）
+  audit       API 稳定性扫描 / CHANGELOG 生成（stability/changelog）
 
 使用 engine <command> -h 查看各命令帮助`)
 }

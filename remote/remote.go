@@ -27,6 +27,8 @@ type Remote struct {
 	HealthCheck   HealthCheckConfig
 	// RetryQueue 可选的消息重发队列配置
 	RetryQueue    RetryQueueConfig
+	// Cipher 可选的消息加密器，启用后远程消息载荷将使用 AES-256-GCM 端到端加密
+	Cipher        MessageCipher
 	// futureRegistry 远程 Future 注册表（跨节点 Request-Response）
 	futureRegistry *RemoteFutureRegistry
 }
@@ -54,9 +56,10 @@ func (r *Remote) Start() {
 		r.Codec = DefaultRemoteCodec()
 	}
 
-	// 传递签名器、TLS 配置和 Codec 到端点管理器
+	// 传递签名器、TLS 配置、加密器和 Codec 到端点管理器
 	r.endpointMgr.signer = r.Signer
 	r.endpointMgr.tlsCfg = r.TLSCfg
+	r.endpointMgr.cipher = r.Cipher
 	r.endpointMgr.codec = r.Codec
 
 	// 启动TCP服务器监听远程连接
@@ -168,6 +171,16 @@ func (a *remoteAgent) Run() {
 				continue
 			}
 			data = payload
+		}
+
+		// 如果启用消息加密，先解密再反序列化
+		if a.remote.Cipher != nil {
+			plain, derr := a.remote.Cipher.Decrypt(data)
+			if derr != nil {
+				log.Error("%v", &engerr.AuthError{Reason: "decrypt failed: " + derr.Error()})
+				continue
+			}
+			data = plain
 		}
 
 		// 使用 Codec 反序列化远程消息（自动区分批量/单条）
