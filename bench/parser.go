@@ -57,7 +57,7 @@ func parseBenchLine(line string) (BenchResult, error) {
 		return BenchResult{}, fmt.Errorf("too few fields: %q", line)
 	}
 
-	name := trimBenchSuffix(fields[0])
+	name, tag := splitNameAndTag(trimBenchSuffix(fields[0]))
 	iters, err := strconv.ParseInt(fields[1], 10, 64)
 	if err != nil {
 		return BenchResult{}, fmt.Errorf("parse iterations: %w", err)
@@ -66,6 +66,7 @@ func parseBenchLine(line string) (BenchResult, error) {
 	res := BenchResult{
 		Name:       name,
 		Iterations: iters,
+		Tag:        tag,
 	}
 
 	// 成对扫描剩余字段：<value> <unit>
@@ -84,6 +85,12 @@ func parseBenchLine(line string) (BenchResult, error) {
 			res.BytesPerOp = int64(val)
 		case "allocs/op":
 			res.AllocsPerOp = int64(val)
+		case "p50-ns/op":
+			res.P50Ns = val
+		case "p95-ns/op":
+			res.P95Ns = val
+		case "p99-ns/op":
+			res.P99Ns = val
 		}
 	}
 
@@ -102,6 +109,14 @@ func trimBenchSuffix(name string) string {
 		}
 	}
 	return name
+}
+
+// splitNameAndTag 从形如 "BenchmarkX/tag/subtag" 中拆出根名与 Tag（以 / 连接剩余部分）
+func splitNameAndTag(full string) (name, tag string) {
+	if idx := strings.Index(full, "/"); idx > 0 {
+		return full[:idx], full[idx+1:]
+	}
+	return full, ""
 }
 
 // extractPackage 从 go test 输出中提取包名行

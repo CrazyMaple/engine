@@ -433,3 +433,146 @@ func (m *MultiSink) Close() error {
 	}
 	return firstErr
 }
+
+// ===== TextLogSink =====
+
+// TextLogSink 以人类可读文本格式输出 LogEntry 到任意 io.Writer
+//
+// 与 NewTextLogger 的输出格式保持一致（供 runtime 把全局 Logger 切成 ContextLogger
+// 时替代 stdout/文件直写）。持有 *os.File 时 Close 会一并关闭。
+type TextLogSink struct {
+	w   io.Writer
+	mu  sync.Mutex
+	own io.Closer
+}
+
+// NewTextLogSink 以 io.Writer 构建，Close 不会关闭外部传入的 Writer
+func NewTextLogSink(w io.Writer) *TextLogSink {
+	return &TextLogSink{w: w}
+}
+
+// NewTextFileSink 以追加模式打开（或创建）文件
+func NewTextFileSink(path string) (*TextLogSink, error) {
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return nil, err
+	}
+	return &TextLogSink{w: f, own: f}, nil
+}
+
+func (t *TextLogSink) Write(entry LogEntry) error {
+	ts := entry.Time
+	if ts.IsZero() {
+		ts = time.Now()
+	}
+	buf := make([]byte, 0, 256)
+	buf = append(buf, ts.Format("2006/01/02 15:04:05")...)
+	buf = append(buf, " ["...)
+	buf = append(buf, entry.Level.String()...)
+	buf = append(buf, "] "...)
+	buf = append(buf, entry.Msg...)
+	if entry.NodeID != "" {
+		buf = append(buf, " node="...)
+		buf = append(buf, entry.NodeID...)
+	}
+	if entry.TraceID != "" {
+		buf = append(buf, " trace="...)
+		buf = append(buf, entry.TraceID...)
+	}
+	if entry.Actor != "" {
+		buf = append(buf, " actor="...)
+		buf = append(buf, entry.Actor...)
+	}
+	for k, v := range entry.Fields {
+		buf = append(buf, ' ')
+		buf = append(buf, k...)
+		buf = append(buf, '=')
+		buf = append(buf, fmt.Sprint(v)...)
+	}
+	buf = append(buf, '\n')
+	t.mu.Lock()
+	_, err := t.w.Write(buf)
+	t.mu.Unlock()
+	return err
+}
+
+func (t *TextLogSink) Flush() error {
+	if f, ok := t.w.(interface{ Sync() error }); ok {
+		return f.Sync()
+	}
+	return nil
+}
+
+func (t *TextLogSink) Close() error {
+	if t.own != nil {
+		return t.own.Close()
+	}
+	return nil
+}
+
+// ===== BroadcastSink =====
+
+// LogSubscriber 消费实时日志流的订阅者
+//
+// Notify 必须非阻塞：内部若需要队列缓冲，应在实现内使用带容量的 chan + select-default 模式。
+// Dashboard WebSocket Sink 是该接口的主要实现
+type LogSubscriber interface {
+	Notify(entry LogEntry)
+}
+
+// BroadcastSink 将每条日志 fan-out 到所有已注册订阅者
+//
+// 作为 Sink 挂接在 MultiSink 链路末端，可与现有 FileSink / RingBufferSink 并存。
+// Subscribe 返回取消函数，调用即从分发列表移除该订阅者，订阅者资源释放由调用方负责。
+type BroadcastSink struct {
+	mu   sync.RWMutex
+	subs map[int64]LogSubscriber
+	seq  atomic.Int64
+}
+
+// NewBroadcastSink 创建广播 Sink
+func NewBroadcastSink() *BroadcastSink {
+	return &BroadcastSink{subs: make(map[int64]LogSubscriber)}
+}
+
+// Subscribe 注册一个订阅者，返回取消函数
+func (b *BroadcastSink) Subscribe(sub LogSubscriber) func() {
+	id := b.seq.Add(1)
+	b.mu.Lock()
+	b.subs[id] = sub
+	b.mu.Unlock()
+	return func() {
+		b.mu.Lock()
+		delete(b.subs, id)
+		b.mu.Unlock()
+	}
+}
+
+// SubscriberCount 当前订阅者数量（测试与监控用）
+func (b *BroadcastSink) SubscriberCount() int {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return len(b.subs)
+}
+
+func (b *BroadcastSink) Write(entry LogEntry) error {
+	b.mu.RLock()
+	subs := make([]LogSubscriber, 0, len(b.subs))
+	for _, s := range b.subs {
+		subs = append(subs, s)
+	}
+	b.mu.RUnlock()
+	for _, s := range subs {
+		s.Notify(entry)
+	}
+	return nil
+}
+
+func (b *BroadcastSink) Flush() error { return nil }
+
+func (b *BroadcastSink) Close() error {
+	b.mu.Lock()
+	b.subs = make(map[int64]LogSubscriber)
+	b.mu.Unlock()
+	return nil
+}

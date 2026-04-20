@@ -99,21 +99,65 @@ func LoadBuffsFromRecordFile(path string, pipeline *BuffRegistry) (int, error) {
 
 // skillJSON 技能 JSON 结构
 type skillJSON struct {
-	ID          string   `json:"id"`
-	Name        string   `json:"name"`
-	Level       int      `json:"level"`
-	CooldownMS  int      `json:"cooldown_ms"`
-	GlobalCDMS  int      `json:"global_cd_ms"`
-	CastTimeMS  int      `json:"cast_time_ms"`
-	BackSwingMS int      `json:"back_swing_ms"`
-	TargetType  int      `json:"target_type"`
-	Range       float32  `json:"range"`
-	AOERadius   float32  `json:"aoe_radius"`
-	CostType    int      `json:"cost_type"`
-	CostValue   int      `json:"cost_value"`
-	Effects     []string `json:"effects"`
-	Tags        []string `json:"tags"`
-	Description string   `json:"description"`
+	ID          string     `json:"id"`
+	Name        string     `json:"name"`
+	Level       int        `json:"level"`
+	CooldownMS  int        `json:"cooldown_ms"`
+	GlobalCDMS  int        `json:"global_cd_ms"`
+	CastTimeMS  int        `json:"cast_time_ms"`
+	BackSwingMS int        `json:"back_swing_ms"`
+	TargetType  int        `json:"target_type"`
+	Range       float32    `json:"range"`
+	AOERadius   float32    `json:"aoe_radius"`
+	CostType    int        `json:"cost_type"`
+	CostValue   int        `json:"cost_value"`
+	Effects     []string   `json:"effects"`
+	Tags        []string   `json:"tags"`
+	Description string     `json:"description"`
+	Phases      []phaseJSON   `json:"phases,omitempty"`
+	Triggers    []triggerJSON `json:"triggers,omitempty"`
+	Chain       *chainNodeJSON `json:"chain,omitempty"`
+}
+
+// phaseJSON 阶段 JSON
+type phaseJSON struct {
+	Kind          int           `json:"kind"`
+	DurationMS    int           `json:"duration_ms"`
+	Effects       []string      `json:"effects"`
+	Triggers      []triggerJSON `json:"triggers,omitempty"`
+	TickIntervalMS int          `json:"tick_interval_ms,omitempty"`
+	Interruptible bool          `json:"interruptible"`
+}
+
+// triggerJSON 触发器 JSON
+type triggerJSON struct {
+	Name         string          `json:"name"`
+	Conditions   []conditionJSON `json:"conditions,omitempty"`
+	ChainSkillID string          `json:"chain_skill_id,omitempty"`
+	ChainDelayMS int             `json:"chain_delay_ms,omitempty"`
+	ApplyBuff    string          `json:"apply_buff,omitempty"`
+	ExtraEffects []string        `json:"extra_effects,omitempty"`
+	Once         bool            `json:"once"`
+}
+
+// conditionJSON 条件 JSON
+type conditionJSON struct {
+	Type   int     `json:"type"`
+	Op     int     `json:"op"`
+	Value  float64 `json:"value,omitempty"`
+	BuffID string  `json:"buff_id,omitempty"`
+	Negate bool    `json:"negate,omitempty"`
+}
+
+// chainNodeJSON DAG 节点 JSON（递归）
+type chainNodeJSON struct {
+	ID        string          `json:"id"`
+	SkillID   string          `json:"skill_id,omitempty"`
+	BuffID    string          `json:"buff_id,omitempty"`
+	Effects   []string        `json:"effects,omitempty"`
+	DelayMS   int             `json:"delay_ms,omitempty"`
+	Condition *conditionJSON  `json:"condition,omitempty"`
+	Next      []chainNodeJSON `json:"next,omitempty"`
 }
 
 // buffJSON Buff JSON 结构
@@ -251,7 +295,7 @@ func rowToBuffDef(r *buffRow) (*BuffDef, error) {
 }
 
 func skillJSONToDef(r *skillJSON) *SkillDef {
-	return &SkillDef{
+	def := &SkillDef{
 		ID:          r.ID,
 		Name:        r.Name,
 		Level:       r.Level,
@@ -268,6 +312,86 @@ func skillJSONToDef(r *skillJSON) *SkillDef {
 		Tags:        r.Tags,
 		Description: r.Description,
 	}
+	if len(r.Phases) > 0 {
+		ps := &PhasedSkill{Phases: make([]PhaseDef, len(r.Phases))}
+		for i, p := range r.Phases {
+			ps.Phases[i] = PhaseDef{
+				Kind:          PhaseKind(p.Kind),
+				Duration:      time.Duration(p.DurationMS) * time.Millisecond,
+				Effects:       p.Effects,
+				Triggers:      triggersFromJSON(p.Triggers),
+				TickInterval:  time.Duration(p.TickIntervalMS) * time.Millisecond,
+				Interruptible: p.Interruptible,
+			}
+		}
+		def.Phased = ps
+	}
+	if len(r.Triggers) > 0 {
+		def.Triggers = triggersFromJSON(r.Triggers)
+	}
+	if r.Chain != nil {
+		def.Chain = &ChainPlan{Root: chainNodeFromJSON(r.Chain)}
+	}
+	return def
+}
+
+func triggersFromJSON(list []triggerJSON) []*Trigger {
+	if len(list) == 0 {
+		return nil
+	}
+	out := make([]*Trigger, len(list))
+	for i, t := range list {
+		trg := &Trigger{
+			Name:         t.Name,
+			ChainSkillID: t.ChainSkillID,
+			ChainDelayMS: t.ChainDelayMS,
+			ApplyBuff:    t.ApplyBuff,
+			ExtraEffects: t.ExtraEffects,
+			Once:         t.Once,
+		}
+		if len(t.Conditions) > 0 {
+			trg.Conditions = make([]Condition, len(t.Conditions))
+			for j, c := range t.Conditions {
+				trg.Conditions[j] = conditionFromJSON(c)
+			}
+		}
+		out[i] = trg
+	}
+	return out
+}
+
+func conditionFromJSON(c conditionJSON) Condition {
+	return Condition{
+		Type:   ConditionType(c.Type),
+		Op:     ConditionOp(c.Op),
+		Value:  c.Value,
+		BuffID: c.BuffID,
+		Negate: c.Negate,
+	}
+}
+
+func chainNodeFromJSON(n *chainNodeJSON) *ChainNode {
+	if n == nil {
+		return nil
+	}
+	node := &ChainNode{
+		ID:      n.ID,
+		SkillID: n.SkillID,
+		BuffID:  n.BuffID,
+		Effects: n.Effects,
+		Delay:   time.Duration(n.DelayMS) * time.Millisecond,
+	}
+	if n.Condition != nil {
+		cd := conditionFromJSON(*n.Condition)
+		node.Condition = &cd
+	}
+	if len(n.Next) > 0 {
+		node.Next = make([]*ChainNode, len(n.Next))
+		for i := range n.Next {
+			node.Next[i] = chainNodeFromJSON(&n.Next[i])
+		}
+	}
+	return node
 }
 
 func buffJSONToDef(r *buffJSON) *BuffDef {

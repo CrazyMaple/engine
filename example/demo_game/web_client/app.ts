@@ -14,15 +14,13 @@
 
 import {
   GameClient,
+  PushSubscriber,
   type ConnectionState,
-  type MatchFoundNotify,
-  type GameStartNotify,
   type GuessResultNotify,
   type TurnNotify,
   type GameOverNotify,
   type TimeoutNotify,
   type ScoreUpdateNotify,
-  type LeaderboardNotify,
 } from "./sdk";
 
 // ============================================================
@@ -50,6 +48,8 @@ const state: AppState = {
 };
 
 let client: GameClient | null = null;
+let push: PushSubscriber | null = null;
+let leaderboardAbort: AbortController | null = null;
 
 // ============================================================
 // SDK Usage Example — Connect & Register Handlers
@@ -71,25 +71,45 @@ export function connectToServer(url: string, playerName: string): void {
     console.log("[state]", s);
   });
 
-  client.onConnect(() => {
-    // Step 3: After connected, send JoinMatchRequest
+  // Step 3: 基于 PushSubscriber 的强类型订阅
+  push = new PushSubscriber(client);
+
+  client.onConnect(async () => {
+    // Step 4: After connected, send JoinMatchRequest
     client!.send("JoinMatchRequest", { player_id: playerName });
-  });
 
-  // Step 4: Register message handlers via router
-  client.router.on("MatchFoundNotify", (msg: MatchFoundNotify) => {
-    console.log("Matched with:", msg.opponent_id);
-  });
+    // Step 4a: 用 push.once 等待 MatchFoundNotify（带超时）— 替代手写 on + 一次性清理
+    try {
+      const matched = await push!.once("MatchFoundNotify", {
+        signal: AbortSignal.timeout(10_000),
+      });
+      console.log("Matched with:", matched.opponent_id);
+    } catch (err) {
+      console.warn("match wait failed:", err);
+      return;
+    }
 
-  client.router.on("GameStartNotify", (msg: GameStartNotify) => {
+    // Step 4b: 用 push.once 等待 GameStartNotify 作为游戏初始化信号
+    const start = await push!.once("GameStartNotify");
     state.inGame = true;
-    state.myTurn = msg.your_turn;
+    state.myTurn = start.your_turn;
     state.rangeLow = 1;
     state.rangeHigh = 100;
     state.round = 1;
-    console.log("Game started!", msg.players.join(" vs "));
+    console.log("Game started!", start.players.join(" vs "));
+
+    // Step 4c: 用 onPush<T> 异步迭代消费排行榜流（AbortController 控制生命周期）
+    leaderboardAbort?.abort();
+    leaderboardAbort = new AbortController();
+    (async () => {
+      const stream = push!.onPush("LeaderboardNotify", { signal: leaderboardAbort!.signal });
+      for await (const msg of stream) {
+        state.leaderboard = msg.entries;
+      }
+    })().catch(console.warn);
   });
 
+  // 回合/命中/结算等高频事件仍用回调风格订阅
   client.router.on("GuessResultNotify", (msg: GuessResultNotify) => {
     if (msg.result === "too_low" && msg.number >= state.rangeLow) {
       state.rangeLow = msg.number + 1;
@@ -116,9 +136,7 @@ export function connectToServer(url: string, playerName: string): void {
 
   client.router.on("ScoreUpdateNotify", (_msg: ScoreUpdateNotify) => {});
 
-  client.router.on("LeaderboardNotify", (msg: LeaderboardNotify) => {
-    state.leaderboard = msg.entries;
-  });
+  // LeaderboardNotify 已在 onConnect 中通过 push.onPush(..., { signal }) 的 async iterator 消费
 
   // Step 5: Connect (returns a Promise)
   client.connect().catch(console.error);
@@ -133,6 +151,9 @@ export function sendGuess(number: number): void {
 
 // Step 7: Disconnect
 export function disconnect(): void {
+  leaderboardAbort?.abort();
+  leaderboardAbort = null;
+  push = null;
   client?.disconnect();
   client = null;
   state.inGame = false;

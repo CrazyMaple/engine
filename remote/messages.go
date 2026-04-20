@@ -10,6 +10,9 @@ type RemoteMessage struct {
 	Type            MessageType `json:"type"`                        // 消息类型
 	TypeName        string      `json:"type_name"`                   // 消息类型名称，用于反序列化
 	ProtocolVersion int         `json:"protocol_version,omitempty"`  // 协议版本号
+	// TraceParent W3C Trace Context（00-{traceid}-{spanid}-{flags}）。
+	// 加密路径保持该头明文（不参与加密），便于网关/Dashboard 按 TraceID 关联跨节点链路。
+	TraceParent string `json:"traceparent,omitempty"`
 }
 
 // MessageType 消息类型

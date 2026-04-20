@@ -37,7 +37,8 @@ func HTMLReport(report *CompareReport, baseline *Baseline) []byte {
 	b.WriteString("<h2>Details</h2>")
 	b.WriteString("<table class=\"detail\">")
 	b.WriteString("<tr><th>Benchmark</th><th>Baseline ns/op</th><th>Current ns/op</th>" +
-		"<th>Δ %</th><th>B/op Δ</th><th>allocs Δ</th><th>Status</th><th>Note</th></tr>")
+		"<th>Δ %</th><th>P50</th><th>P95</th><th>P99</th>" +
+		"<th>B/op Δ</th><th>allocs Δ</th><th>Status</th><th>Note</th></tr>")
 	for _, e := range report.Entries {
 		cls := cssForLevel(e.Level)
 		baseNs := "—"
@@ -48,12 +49,20 @@ func HTMLReport(report *CompareReport, baseline *Baseline) []byte {
 		}
 		b.WriteString(fmt.Sprintf(
 			"<tr class=\"%s\"><td>%s</td><td>%s</td><td>%.2f</td><td>%s</td>"+
+				"<td>%s</td><td>%s</td><td>%s</td>"+
 				"<td>%+d</td><td>%+d</td><td>%s</td><td>%s</td></tr>",
 			cls, html.EscapeString(e.Name), baseNs, e.Current.NsPerOp, deltaPct,
+			fmtNsOrDash(e.Current.P50Ns), fmtNsOrDash(e.Current.P95Ns), fmtNsOrDash(e.Current.P99Ns),
 			e.BytesDelta, e.AllocsDelta, e.Level.String(), html.EscapeString(e.Note),
 		))
 	}
 	b.WriteString("</table>")
+
+	// 百分位延迟对比图（仅当有百分位数据的基准）
+	if hasPercentiles(report) {
+		b.WriteString("<h2>Latency Percentiles</h2>")
+		b.WriteString(percentileBars(report))
+	}
 
 	b.WriteString(fmt.Sprintf(
 		"<p class=\"totals\">Totals: %d benchmarks | %d major | %d minor | %d improved | %d new</p>",
@@ -75,6 +84,86 @@ func HTMLReport(report *CompareReport, baseline *Baseline) []byte {
 
 	b.WriteString("</div></body></html>")
 	return []byte(b.String())
+}
+
+func fmtNsOrDash(v float64) string {
+	if v <= 0 {
+		return "—"
+	}
+	return fmt.Sprintf("%.0f", v)
+}
+
+// hasPercentiles 报告中是否存在带百分位的基准
+func hasPercentiles(r *CompareReport) bool {
+	for _, e := range r.Entries {
+		if e.Current.P99Ns > 0 || e.Current.P95Ns > 0 || e.Current.P50Ns > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// percentileBars 生成百分位延迟横向柱状图（SVG），P50/P95/P99 三色堆叠
+func percentileBars(r *CompareReport) string {
+	// 找出全局最大 P99 作为基准
+	var maxV float64
+	for _, e := range r.Entries {
+		if e.Current.P99Ns > maxV {
+			maxV = e.Current.P99Ns
+		}
+	}
+	if maxV <= 0 {
+		return ""
+	}
+	const (
+		width   = 640.0
+		rowH    = 22.0
+		padLeft = 180.0
+	)
+	var svg strings.Builder
+	items := 0
+	for _, e := range r.Entries {
+		if e.Current.P99Ns <= 0 && e.Current.P95Ns <= 0 && e.Current.P50Ns <= 0 {
+			continue
+		}
+		items++
+	}
+	if items == 0 {
+		return ""
+	}
+	totalH := float64(items) * rowH
+	svg.WriteString(fmt.Sprintf(
+		`<svg viewBox="0 0 %.0f %.0f" width="%.0f" height="%.0f" class="percentile-chart">`,
+		width, totalH, width, totalH))
+	var row int
+	for _, e := range r.Entries {
+		if e.Current.P99Ns <= 0 && e.Current.P95Ns <= 0 && e.Current.P50Ns <= 0 {
+			continue
+		}
+		y := float64(row)*rowH + 6
+		p50w := e.Current.P50Ns / maxV * (width - padLeft - 10)
+		p95w := e.Current.P95Ns / maxV * (width - padLeft - 10)
+		p99w := e.Current.P99Ns / maxV * (width - padLeft - 10)
+		svg.WriteString(fmt.Sprintf(
+			`<text x="4" y="%.1f" font-size="11" fill="#333">%s</text>`,
+			y+11, html.EscapeString(e.Name)))
+		svg.WriteString(fmt.Sprintf(
+			`<rect x="%.1f" y="%.1f" width="%.1f" height="14" fill="#bdd7ee"/>`,
+			padLeft, y, p99w))
+		svg.WriteString(fmt.Sprintf(
+			`<rect x="%.1f" y="%.1f" width="%.1f" height="14" fill="#6baed6"/>`,
+			padLeft, y, p95w))
+		svg.WriteString(fmt.Sprintf(
+			`<rect x="%.1f" y="%.1f" width="%.1f" height="14" fill="#2171b5"/>`,
+			padLeft, y, p50w))
+		svg.WriteString(fmt.Sprintf(
+			`<text x="%.1f" y="%.1f" font-size="10" fill="#666">P99=%.0fns</text>`,
+			padLeft+p99w+4, y+11, e.Current.P99Ns))
+		row++
+	}
+	svg.WriteString("</svg>")
+	svg.WriteString(`<p class="legend"><span class="sw sw1"></span>P50 <span class="sw sw2"></span>P95 <span class="sw sw3"></span>P99</p>`)
+	return svg.String()
 }
 
 func summaryCard(label, value, kind string) string {
@@ -154,6 +243,10 @@ table.detail tr.minor { background: #fff4e0; }
 table.detail tr.improved { background: #e7f5ea; }
 table.detail tr.new { background: #e3f2fd; }
 .spark { background: #fafafa; border: 1px solid #eee; border-radius: 4px; }
+.percentile-chart { background: #fafafa; border: 1px solid #eee; border-radius: 4px; }
+.legend { font-size: 12px; color: #555; }
+.legend .sw { display: inline-block; width: 10px; height: 10px; margin: 0 4px 0 8px; vertical-align: middle; }
+.legend .sw1 { background: #2171b5; } .legend .sw2 { background: #6baed6; } .legend .sw3 { background: #bdd7ee; }
 h2 { margin-top: 28px; }
 h3 { margin-top: 18px; font-size: 14px; font-family: monospace; }
 </style></head>`

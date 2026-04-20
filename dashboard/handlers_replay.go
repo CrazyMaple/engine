@@ -140,6 +140,102 @@ func (h *handlers) handleReplayDelete(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]interface{}{"status": "ok", "deleted": name})
 }
 
+// ---- GET /api/replay/archive/list ----
+// 列出所有已归档的回放条目
+func (h *handlers) handleReplayArchiveList(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "GET only")
+		return
+	}
+	if h.config.ReplayArchiver == nil {
+		writeError(w, http.StatusServiceUnavailable, "archiver not configured")
+		return
+	}
+	writeJSON(w, h.config.ReplayArchiver.List())
+}
+
+// ---- POST /api/replay/archive/run ----
+// 手动触发一次归档扫描（按策略或指定文件名）
+// Body 可选：{"name":"room_123.replay"} — 仅归档单个文件
+func (h *handlers) handleReplayArchiveRun(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "POST only")
+		return
+	}
+	arc := h.config.ReplayArchiver
+	if arc == nil {
+		writeError(w, http.StatusServiceUnavailable, "archiver not configured")
+		return
+	}
+	name := r.URL.Query().Get("name")
+	if name != "" {
+		entry, err := arc.ArchiveFile(name)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, entry)
+		return
+	}
+	result, err := arc.Run()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, result)
+}
+
+// ---- GET /api/replay/archive/fetch?name=xxx ----
+// 按需从归档拉取原始回放二进制（自动解压缩）
+func (h *handlers) handleReplayArchiveFetch(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "GET only")
+		return
+	}
+	arc := h.config.ReplayArchiver
+	if arc == nil {
+		writeError(w, http.StatusServiceUnavailable, "archiver not configured")
+		return
+	}
+	name := r.URL.Query().Get("name")
+	if name == "" {
+		writeError(w, http.StatusBadRequest, "name required")
+		return
+	}
+	data, err := arc.Fetch(name)
+	if err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Disposition", "attachment; filename=\""+filepath.Base(name)+"\"")
+	_, _ = w.Write(data)
+}
+
+// ---- DELETE/POST /api/replay/archive/delete?name=xxx ----
+// 删除归档数据和索引条目
+func (h *handlers) handleReplayArchiveDelete(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete && r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "DELETE or POST only")
+		return
+	}
+	arc := h.config.ReplayArchiver
+	if arc == nil {
+		writeError(w, http.StatusServiceUnavailable, "archiver not configured")
+		return
+	}
+	name := r.URL.Query().Get("name")
+	if name == "" {
+		writeError(w, http.StatusBadRequest, "name required")
+		return
+	}
+	if err := arc.Remove(name); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, map[string]string{"status": "ok", "deleted": name})
+}
+
 func isReplayFile(name string) bool {
 	ext := strings.ToLower(filepath.Ext(name))
 	return ext == ".replay" || ext == ".rpl" || ext == ".bin"

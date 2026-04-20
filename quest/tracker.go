@@ -23,16 +23,76 @@ type QuestTracker struct {
 	active   map[string]*QuestInstance // questID → 实例
 	history  map[string]QuestStatus    // questID → 终态（已完成/已失败）
 	onChange func(playerID string, quest *QuestInstance) // 进度变更回调
+
+	// --- v1.11 扩展：玩家属性供复合前置条件评估 ---
+	playerLevel int
+	reputation  map[string]int
+	flags       map[string]bool
 }
 
 // NewQuestTracker 创建任务追踪器
 func NewQuestTracker(playerID string, registry *QuestRegistry) *QuestTracker {
 	return &QuestTracker{
-		playerID: playerID,
-		registry: registry,
-		active:   make(map[string]*QuestInstance),
-		history:  make(map[string]QuestStatus),
+		playerID:   playerID,
+		registry:   registry,
+		active:     make(map[string]*QuestInstance),
+		history:    make(map[string]QuestStatus),
+		reputation: make(map[string]int),
+		flags:      make(map[string]bool),
 	}
+}
+
+// SetPlayerLevel 记录玩家等级（影响复合前置条件）
+func (t *QuestTracker) SetPlayerLevel(level int) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.playerLevel = level
+}
+
+// SetReputation 设置声望字段
+func (t *QuestTracker) SetReputation(key string, value int) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.reputation[key] = value
+}
+
+// SetFlag 设置/清除自定义标志
+func (t *QuestTracker) SetFlag(flag string, value bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.flags[flag] = value
+}
+
+// buildPrereqContextLocked 构造复合前置条件评估上下文（调用者持锁）
+func (t *QuestTracker) buildPrereqContextLocked() *PrereqContext {
+	return &PrereqContext{
+		QuestDone: func(id string) bool {
+			return t.history[id] == QuestRewarded
+		},
+		Level:      t.playerLevel,
+		Reputation: t.reputation,
+		Flags:      t.flags,
+	}
+}
+
+// ChooseBranch 在活跃的分支任务上选择分支
+func (t *QuestTracker) ChooseBranch(questID, branchID string) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	q, ok := t.active[questID]
+	if !ok {
+		return fmt.Errorf("quest %s not active", questID)
+	}
+	if q.Def.Branches == nil {
+		return fmt.Errorf("quest %s has no branches", questID)
+	}
+	if !q.ChooseBranch(branchID) {
+		return fmt.Errorf("invalid branch %s or already chosen", branchID)
+	}
+	if t.onChange != nil {
+		t.onChange(t.playerID, q)
+	}
+	return nil
 }
 
 // SetOnChange 设置进度变更回调
@@ -69,6 +129,19 @@ func (t *QuestTracker) Accept(questID string, now time.Time) error {
 		if !ok || status != QuestRewarded {
 			return fmt.Errorf("prerequisite quest %s not completed", prereq)
 		}
+	}
+
+	// 复合前置条件（v1.11 扩展）
+	if def.Prereq != nil {
+		ctx := t.buildPrereqContextLocked()
+		if !def.Prereq.Evaluate(ctx) {
+			return fmt.Errorf("composite prerequisite not satisfied")
+		}
+	}
+
+	// 玩家等级（如果 Def.Level > 0）
+	if def.Level > 0 && t.playerLevel > 0 && t.playerLevel < def.Level {
+		return fmt.Errorf("level %d below requirement %d", t.playerLevel, def.Level)
 	}
 
 	inst := NewQuestInstance(def, t.playerID, now)

@@ -1,0 +1,21 @@
+{
+  "name": "engine-demo-game-web-client",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Engine TypeScript SDK demo — Guess Number online game web client",
+  "scripts": {
+    "build": "esbuild app.ts --bundle --outfile=dist/app.js --format=iife --target=es2019 --sourcemap",
+    "build:min": "esbuild app.ts --bundle --outfile=dist/app.min.js --format=iife --target=es2019 --minify",
+    "watch": "esbuild app.ts --bundle --outfile=dist/app.js --format=iife --target=es2019 --sourcemap --watch",
+    "typecheck": "tsc --noEmit",
+    "serve": "npx --yes http-server . -p 5173 -c-1",
+    "clean": "rm -rf dist"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0",
+    "typescript": "^5.4.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

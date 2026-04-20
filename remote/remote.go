@@ -107,8 +107,14 @@ func (r *Remote) Stop() {
 	log.Info("Remote stopped")
 }
 
-// Send 发送消息到远程Actor
+// Send 发送消息到远程Actor（不携带 TraceID，等价于 SendWithTrace(..., "")）
 func (r *Remote) Send(target *actor.PID, sender *actor.PID, message interface{}, msgType MessageType) {
+	r.SendWithTrace(target, sender, message, msgType, "")
+}
+
+// SendWithTrace 发送消息并携带 W3C traceparent，便于跨节点链路关联。
+// traceParent 形如 "00-{traceid}-{spanid}-{flags}"；为空则不附带。
+func (r *Remote) SendWithTrace(target *actor.PID, sender *actor.PID, message interface{}, msgType MessageType, traceParent string) {
 	endpoint := r.endpointMgr.GetEndpoint(target.Address)
 	if endpoint == nil {
 		log.Error("Endpoint not found: %s", target.Address)
@@ -127,11 +133,12 @@ func (r *Remote) Send(target *actor.PID, sender *actor.PID, message interface{},
 	typeName, _ := defaultTypeRegistry.GetTypeName(message)
 
 	remoteMsg := &RemoteMessage{
-		Target:   target,
-		Sender:   sender,
-		Message:  message,
-		Type:     msgType,
-		TypeName: typeName,
+		Target:      target,
+		Sender:      sender,
+		Message:     message,
+		Type:        msgType,
+		TypeName:    typeName,
+		TraceParent: traceParent,
 	}
 
 	endpoint.Send(remoteMsg)
@@ -236,8 +243,10 @@ func (a *remoteAgent) routeMessage(msg *RemoteMessage) {
 
 	switch msg.Type {
 	case MessageTypeUser:
-		// 使用信封携带 sender 信息，使目标 Actor 可以通过 ctx.Respond() 回复
-		process.SendUserMessage(localTarget, actor.WrapEnvelope(msg.Message, msg.Sender))
+		// 使用信封携带 sender / TraceID，使目标 Actor 可以通过 ctx.Respond() 回复，
+		// 并让 ctx.TraceID() 返回跨节点传播的 W3C traceparent。
+		env := actor.WrapEnvelopeWithTrace(msg.Message, msg.Sender, msg.TraceParent)
+		process.SendUserMessage(localTarget, env)
 	case MessageTypeSystem:
 		process.SendSystemMessage(localTarget, msg.Message)
 	}

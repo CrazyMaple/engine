@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"engine/config"
 )
 
 func cmdInit(args []string) error {
@@ -125,12 +127,18 @@ build:
 		return err
 	}
 
+	// engine.yaml 模板，与 engine run --config engine.yaml 对齐
+	if err := writeIfNotExist(filepath.Join(absDir, "engine.yaml"), string(config.GenerateTemplate())); err != nil {
+		return err
+	}
+
 	fmt.Println("项目脚手架已生成:")
 	fmt.Println("  go.mod")
 	fmt.Println("  main.go")
 	fmt.Println("  messages.go")
 	fmt.Println("  Makefile")
 	fmt.Println("  config/server.json")
+	fmt.Println("  engine.yaml  (用于 engine run --config engine.yaml)")
 	fmt.Printf("\n下一步:\n  cd %s && go mod tidy\n", *dir)
 	return nil
 }

@@ -20,6 +20,8 @@ func cmdGen(args []string) error {
 	csNamespace := fs.String("cs-ns", "GameMessages", "C# 命名空间")
 	docOutput := fs.String("doc", "", "Markdown API 文档输出路径")
 	registryOutput := fs.String("registry", "", "TypeRegistry 注册代码输出路径")
+	tsRPCOutput := fs.String("ts-rpc", "", "TypeScript RPC/Push 增强层输出路径（Promise + 超时 + OnPush<T>）")
+	csRPCOutput := fs.String("cs-rpc", "", "C# RPC/Push 增强层输出路径（Task + 超时 + PushStream<T>）")
 	fs.Parse(args)
 
 	if *input == "" && *proto == "" {
@@ -59,6 +61,8 @@ func cmdGen(args []string) error {
 		{"C# 类型", csOutput, func() ([]byte, error) { return codegen.GenerateCSharp(msgs, *csNamespace) }},
 		{"API 文档", docOutput, func() ([]byte, error) { return codegen.GenerateMarkdownDoc(msgs) }},
 		{"TypeRegistry", registryOutput, func() ([]byte, error) { return codegen.GenerateTypeRegistry(msgs, *pkg) }},
+		{"TypeScript RPC 增强", tsRPCOutput, func() ([]byte, error) { return codegen.GenerateTSRPCEnhance(msgs) }},
+		{"C# RPC 增强", csRPCOutput, func() ([]byte, error) { return codegen.GenerateCSharpRPCEnhance(*csNamespace) }},
 	}
 
 	for _, task := range tasks {

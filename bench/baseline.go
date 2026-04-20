@@ -21,14 +21,27 @@ type BenchResult struct {
 	MBPerSec   float64 `json:"mb_per_sec,omitempty"`
 	BytesPerOp int64   `json:"bytes_per_op,omitempty"`
 	AllocsPerOp int64  `json:"allocs_per_op,omitempty"`
+	// Tag 基线标签（如 pre-encryption / post-encryption / delta-sync），
+	// 用于区分同一基准在不同配置/版本下的多组基线。
+	Tag string `json:"tag,omitempty"`
+	// P50/P95/P99 百分位延迟（ns）。并非所有基准都会记录百分位；
+	// 仅在 RecordLatency 风格的基准中填充。
+	P50Ns float64 `json:"p50_ns,omitempty"`
+	P95Ns float64 `json:"p95_ns,omitempty"`
+	P99Ns float64 `json:"p99_ns,omitempty"`
 }
 
 // Key 返回基准的唯一标识（含包路径以避免同名基准冲突）
+// 同名基准在不同 Tag 下被视为不同条目，便于 pre/post 对比共存。
 func (r BenchResult) Key() string {
-	if r.Package == "" {
-		return r.Name
+	base := r.Name
+	if r.Package != "" {
+		base = r.Package + "." + r.Name
 	}
-	return r.Package + "." + r.Name
+	if r.Tag != "" {
+		return base + "#" + r.Tag
+	}
+	return base
 }
 
 // Baseline 基线文件内容

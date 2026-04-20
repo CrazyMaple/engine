@@ -55,6 +55,45 @@ type ExperimentResult struct {
 	VariantName  string `json:"variantName"`
 }
 
+// variantObservations 单个变体的指标观测
+type variantObservations struct {
+	// continuous 连续型指标的 Welford 累积量（支持多指标，按 metric 名分桶）
+	continuous map[string]*runningStats
+	// successes 计数型指标：某 metric 下的成功次数
+	successes map[string]int64
+	// trials 计数型指标：某 metric 下的尝试次数
+	trials map[string]int64
+}
+
+func newVariantObservations() *variantObservations {
+	return &variantObservations{
+		continuous: make(map[string]*runningStats),
+		successes:  make(map[string]int64),
+		trials:     make(map[string]int64),
+	}
+}
+
+// runningStats Welford 在线均值/方差
+type runningStats struct {
+	n    int
+	mean float64
+	m2   float64
+}
+
+func (r *runningStats) push(x float64) {
+	r.n++
+	delta := x - r.mean
+	r.mean += delta / float64(r.n)
+	r.m2 += delta * (x - r.mean)
+}
+
+func (r *runningStats) sample() Sample {
+	if r.n <= 1 {
+		return Sample{N: r.n, Mean: r.mean}
+	}
+	return Sample{N: r.n, Mean: r.mean, Variance: r.m2 / float64(r.n-1)}
+}
+
 // ABTestManager A/B 测试管理器
 type ABTestManager struct {
 	mu          sync.RWMutex
@@ -62,6 +101,9 @@ type ABTestManager struct {
 
 	// 实验命中统计：experiment_id -> variant_name -> count
 	assignCounts map[string]map[string]int64
+
+	// 实验观测值：experiment_id -> variant_name -> *variantObservations
+	observations map[string]map[string]*variantObservations
 }
 
 // NewABTestManager 创建 A/B 测试管理器
@@ -69,6 +111,7 @@ func NewABTestManager() *ABTestManager {
 	return &ABTestManager{
 		experiments:  make(map[string]*Experiment),
 		assignCounts: make(map[string]map[string]int64),
+		observations: make(map[string]map[string]*variantObservations),
 	}
 }
 
@@ -100,6 +143,10 @@ func (m *ABTestManager) CreateExperiment(exp Experiment) error {
 	m.mu.Lock()
 	m.experiments[exp.ID] = &exp
 	m.assignCounts[exp.ID] = make(map[string]int64)
+	m.observations[exp.ID] = make(map[string]*variantObservations)
+	for _, v := range exp.Variants {
+		m.observations[exp.ID][v.Name] = newVariantObservations()
+	}
 	m.mu.Unlock()
 	return nil
 }
@@ -183,7 +230,146 @@ func (m *ABTestManager) DeleteExperiment(id string) {
 	m.mu.Lock()
 	delete(m.experiments, id)
 	delete(m.assignCounts, id)
+	delete(m.observations, id)
 	m.mu.Unlock()
+}
+
+// RecordMetric 记录连续型指标观测（如在线时长、客单价）
+// 若 experiment 或 variant 不存在则静默丢弃。
+func (m *ABTestManager) RecordMetric(experimentID, variant, metric string, value float64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	bucket := m.observations[experimentID]
+	if bucket == nil {
+		return
+	}
+	obs := bucket[variant]
+	if obs == nil {
+		return
+	}
+	rs := obs.continuous[metric]
+	if rs == nil {
+		rs = &runningStats{}
+		obs.continuous[metric] = rs
+	}
+	rs.push(value)
+}
+
+// RecordConversion 记录转化/成功事件（Successes++, Trials++）
+func (m *ABTestManager) RecordConversion(experimentID, variant, metric string, success bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	bucket := m.observations[experimentID]
+	if bucket == nil {
+		return
+	}
+	obs := bucket[variant]
+	if obs == nil {
+		return
+	}
+	obs.trials[metric]++
+	if success {
+		obs.successes[metric]++
+	}
+}
+
+// AnalyzeOptions 分析选项
+type AnalyzeOptions struct {
+	// Metric 指定指标名
+	Metric string
+	// Control 对照组变体名（默认 exp.Variants[0]）
+	Control string
+	// Treatment 实验组变体名（默认 exp.Variants[1]）
+	Treatment string
+	// Kind 指标类型："continuous"（默认）或 "proportion"
+	Kind string
+	// Alpha 显著性水平（默认 0.05）
+	Alpha float64
+	// MinSample 每组最小样本量（默认 30）
+	MinSample int
+}
+
+// Analyze 对实验进行显著性分析
+// 未记录任何观测值时返回 Underpowered 结论。
+func (m *ABTestManager) Analyze(experimentID string, opts AnalyzeOptions) (ExperimentAnalysis, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	exp, ok := m.experiments[experimentID]
+	if !ok {
+		return ExperimentAnalysis{}, &WeightError{Msg: "experiment not found: " + experimentID}
+	}
+	bucket := m.observations[experimentID]
+	if bucket == nil {
+		return ExperimentAnalysis{}, &WeightError{Msg: "experiment has no observations: " + experimentID}
+	}
+	control := opts.Control
+	treatment := opts.Treatment
+	if control == "" || treatment == "" {
+		if len(exp.Variants) < 2 {
+			return ExperimentAnalysis{}, &WeightError{Msg: "experiment needs at least 2 variants"}
+		}
+		if control == "" {
+			control = exp.Variants[0].Name
+		}
+		if treatment == "" {
+			treatment = exp.Variants[1].Name
+		}
+	}
+	c, cok := bucket[control]
+	t, tok := bucket[treatment]
+	if !cok || !tok {
+		return ExperimentAnalysis{}, &WeightError{Msg: "unknown variant"}
+	}
+
+	switch opts.Kind {
+	case "", "continuous":
+		metric := opts.Metric
+		if metric == "" {
+			return ExperimentAnalysis{}, &WeightError{Msg: "metric name required for continuous analysis"}
+		}
+		cs := Sample{}
+		ts := Sample{}
+		if rs := c.continuous[metric]; rs != nil {
+			cs = rs.sample()
+		}
+		if rs := t.continuous[metric]; rs != nil {
+			ts = rs.sample()
+		}
+		return AnalyzeContinuous(cs, ts, opts.Alpha, opts.MinSample), nil
+	case "proportion":
+		metric := opts.Metric
+		if metric == "" {
+			return ExperimentAnalysis{}, &WeightError{Msg: "metric name required for proportion analysis"}
+		}
+		cp := Proportion{N: int(c.trials[metric]), Successes: int(c.successes[metric])}
+		tp := Proportion{N: int(t.trials[metric]), Successes: int(t.successes[metric])}
+		return AnalyzeProportion(cp, tp, opts.Alpha, opts.MinSample), nil
+	default:
+		return ExperimentAnalysis{}, &WeightError{Msg: "unsupported analysis kind: " + opts.Kind}
+	}
+}
+
+// ObservedMetrics 返回某实验下已记录的指标名清单（按变体分桶）
+func (m *ABTestManager) ObservedMetrics(experimentID string) map[string]map[string]int64 {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	bucket := m.observations[experimentID]
+	if bucket == nil {
+		return nil
+	}
+	out := make(map[string]map[string]int64, len(bucket))
+	for variant, obs := range bucket {
+		counts := make(map[string]int64)
+		for metric, rs := range obs.continuous {
+			counts["continuous:"+metric] = int64(rs.n)
+		}
+		for metric, n := range obs.trials {
+			counts["proportion:"+metric] = n
+		}
+		out[variant] = counts
+	}
+	return out
 }
 
 // Assign 为用户分配实验变体

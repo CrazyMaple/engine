@@ -42,6 +42,14 @@ type SkillDef struct {
 	Effects     []string      // 效果链（Effect ID 列表，按顺序执行）
 	Tags        []string      // 技能标签（如 "physical","magic","heal"）
 	Description string        // 技能描述
+
+	// --- 高级表达（可选，v1.11 扩展）---
+	// Phased 多阶段定义，非 nil 时由阶段化管线驱动；nil 时退化为一次性执行 Effects
+	Phased *PhasedSkill
+	// Chain 连锁 DAG（可选），当任一阶段 Triggers 无 ChainSkillID 但技能整体需要 DAG 派生时使用
+	Chain *ChainPlan
+	// Triggers 释放完毕后统一求值的触发器（与 Phases 内 triggers 叠加）
+	Triggers []*Trigger
 }
 
 // SkillInstance 技能运行时实例

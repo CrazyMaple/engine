@@ -10,8 +10,10 @@ import (
 	"engine/cluster"
 	"engine/cluster/canary"
 	"engine/config"
+	"engine/leaderboard"
 	"engine/log"
 	"engine/middleware"
+	"engine/replay"
 )
 
 // Config Dashboard 配置
@@ -62,14 +64,24 @@ type Config struct {
 	ABTestManager *canary.ABTestManager
 	// LogRingBuffer 日志环形缓冲（可选，启用 /api/log/query 接口）
 	LogRingBuffer *log.RingBufferSink
+	// LogBroadcast 实时日志广播 Sink（可选，启用 /ws/log WebSocket 流）
+	LogBroadcast *log.BroadcastSink
 	// AlertManager 告警管理器（可选，启用 /api/alerts 接口）
 	AlertManager *AlertManager
 	// ReplayDir 回放文件根目录（可选，启用 /api/replay 接口）
 	ReplayDir string
+	// ReplayArchiver 回放冷数据归档器（可选，启用 /api/replay/archive 接口）
+	ReplayArchiver *replay.Archiver
 	// ChainedAudit 哈希链审计日志（可选，启用 /api/audit/chained/* 接口）
 	ChainedAudit *ChainedAuditLog
 	// ConfirmationMgr 高危操作二次确认码管理器（可选，启用 /api/audit/confirm/* 接口）
 	ConfirmationMgr *ConfirmationManager
+	// SpanExporter 内存 Span 导出器（可选，启用 /api/trace/chain 和 /api/trace/active 接口）
+	SpanExporter *middleware.InMemorySpanExporter
+	// HotProfiler 热点 Actor 滑动窗口画像器（可选，启用 /api/profile/hotactors 和 /api/profile/candidates 接口）
+	HotProfiler *actor.HotActorProfiler
+	// SeasonManager 排行榜赛季管理器（可选，启用 /api/leaderboard/season/* 接口）
+	SeasonManager *leaderboard.SeasonManager
 }
 
 // Dashboard Web 管理面板
@@ -172,6 +184,14 @@ func (d *Dashboard) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/runtime", h.handleRuntime)
 	mux.HandleFunc("/api/actors/topology", h.handleActorTopology)
 	mux.HandleFunc("/api/traces", h.handleTraces)
+	if d.config.SpanExporter != nil {
+		mux.HandleFunc("/api/trace/chain", h.handleTraceChain)
+		mux.HandleFunc("/api/trace/active", h.handleTraceActive)
+	}
+	if d.config.HotProfiler != nil {
+		mux.HandleFunc("/api/profile/hotactors", h.handleProfileHotActors)
+		mux.HandleFunc("/api/profile/candidates", h.handleProfileCandidates)
+	}
 	mux.HandleFunc("/api/metrics/history", h.handleMetricsHistory)
 	mux.HandleFunc("/api/cluster/graph", h.handleClusterGraph)
 	mux.HandleFunc("/api/actors/flamegraph", h.handleFlameGraph)
@@ -231,6 +251,9 @@ func (d *Dashboard) registerRoutes(mux *http.ServeMux) {
 		mux.HandleFunc("/api/ab/experiment", h.handleABExperiment)
 		mux.HandleFunc("/api/ab/assign", h.handleABAssign)
 		mux.HandleFunc("/api/ab/stats", h.handleABStats)
+		mux.HandleFunc("/api/ab/record", h.handleABRecord)
+		mux.HandleFunc("/api/ab/analyze", h.handleABAnalyze)
+		mux.HandleFunc("/api/ab/metrics", h.handleABMetrics)
 	}
 
 	// GM 管理后台端点
@@ -257,6 +280,11 @@ func (d *Dashboard) registerRoutes(mux *http.ServeMux) {
 		mux.HandleFunc("/api/log/stats", h.handleLogStats)
 	}
 
+	// 实时日志 WebSocket 推送
+	if d.config.LogBroadcast != nil {
+		mux.HandleFunc("/ws/log", h.handleLogWS)
+	}
+
 	// 告警端点
 	if d.config.AlertManager != nil {
 		mux.HandleFunc("/api/alerts/rules", h.handleAlertRules)
@@ -280,9 +308,27 @@ func (d *Dashboard) registerRoutes(mux *http.ServeMux) {
 		mux.HandleFunc("/api/replay/delete", h.handleReplayDelete)
 	}
 
+	// 回放归档管理端点
+	if d.config.ReplayArchiver != nil {
+		mux.HandleFunc("/api/replay/archive/list", h.handleReplayArchiveList)
+		mux.HandleFunc("/api/replay/archive/run", h.handleReplayArchiveRun)
+		mux.HandleFunc("/api/replay/archive/fetch", h.handleReplayArchiveFetch)
+		mux.HandleFunc("/api/replay/archive/delete", h.handleReplayArchiveDelete)
+	}
+
 	// 审计合规增强端点（哈希链 + 导出 + 二次确认）
 	if d.config.ChainedAudit != nil || d.config.ConfirmationMgr != nil {
 		aeh := NewAuditEnhancedHandlers(d.config.ChainedAudit, d.config.ConfirmationMgr)
 		aeh.RegisterRoutes(mux)
+	}
+
+	// 排行榜赛季管理
+	if d.config.SeasonManager != nil {
+		mux.HandleFunc("/api/leaderboard/season/current", h.handleSeasonCurrent)
+		mux.HandleFunc("/api/leaderboard/season/register", h.handleSeasonRegister)
+		mux.HandleFunc("/api/leaderboard/season/settle", h.handleSeasonSettle)
+		mux.HandleFunc("/api/leaderboard/season/history", h.handleSeasonHistory)
+		mux.HandleFunc("/api/leaderboard/season/snapshot", h.handleSeasonSnapshot)
+		mux.HandleFunc("/api/leaderboard/season/cross", h.handleSeasonCrossQuery)
 	}
 }

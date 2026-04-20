@@ -35,6 +35,15 @@ type QuestDef struct {
 	Level       int         // 解锁等级要求
 	TimeLimit   time.Duration // 限时（0=无限制）
 	AutoAccept  bool        // 是否自动接取
+
+	// --- v1.11 扩展（可选）---
+
+	// Prereq 复合前置条件（AND/OR + 声望 + 等级 + 标志），优先级高于 PrereqIDs+Level
+	Prereq *Prerequisite
+	// Branches 分支任务定义（nil = 线性任务）
+	Branches *BranchDef
+	// Shared 如果为 true，该任务支持队伍共享进度
+	Shared bool
 }
 
 // StepDef 任务步骤定义
@@ -60,6 +69,10 @@ type QuestInstance struct {
 	Steps      []StepProgress  // 各步骤进度
 	AcceptTime time.Time       // 接取时间
 	PlayerID   string
+	// Branch 分支任务运行时（Def.Branches != nil 时初始化）
+	Branch *BranchState
+	// TeamID 若该任务来自共享池，记录队伍 ID
+	TeamID string
 }
 
 // StepProgress 步骤进度
@@ -79,13 +92,17 @@ func NewQuestInstance(def *QuestDef, playerID string, now time.Time) *QuestInsta
 			Required: s.Required,
 		}
 	}
-	return &QuestInstance{
+	inst := &QuestInstance{
 		Def:        def,
 		Status:     QuestActive,
 		Steps:      steps,
 		AcceptTime: now,
 		PlayerID:   playerID,
 	}
+	if def.Branches != nil {
+		inst.Branch = &BranchState{}
+	}
+	return inst
 }
 
 // IsExpired 检查任务是否超时

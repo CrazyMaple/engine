@@ -11,6 +11,10 @@ type SkillComponent struct {
 	PendingCasts []SkillCastRequest
 	// LastResults 最近一次释放产生的效果结果（供上层读取）
 	LastResults []skill.EffectResult
+	// ActiveSession 当前正在推进的阶段化技能会话（nil = 无）
+	ActiveSession *skill.CastSession
+	// ChainScheduler 链式派生动作调度器
+	ChainScheduler *skill.ChainScheduler
 }
 
 func (c *SkillComponent) ComponentType() string { return "Skill" }
@@ -18,8 +22,9 @@ func (c *SkillComponent) ComponentType() string { return "Skill" }
 // NewSkillComponent 创建技能组件
 func NewSkillComponent(caster *skill.SkillCaster) *SkillComponent {
 	return &SkillComponent{
-		Caster:       caster,
-		PendingCasts: make([]SkillCastRequest, 0),
+		Caster:         caster,
+		PendingCasts:   make([]SkillCastRequest, 0),
+		ChainScheduler: skill.NewChainScheduler(),
 	}
 }
 

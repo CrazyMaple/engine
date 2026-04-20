@@ -3,6 +3,7 @@ package codegen
 import (
 	"bytes"
 	"fmt"
+	"strings"
 	"text/template"
 )
 
@@ -68,6 +69,69 @@ func GenerateProtoRegistryGo(msgs []MessageDef, pkg string) ([]byte, error) {
 // GenerateTSProtoExample 生成 TypeScript 示例工程入口文件 main.ts
 func GenerateTSProtoExample() []byte {
 	return []byte(tsExampleMainTemplate)
+}
+
+// RPCPair 表示一对 Request/Response 消息
+type RPCPair struct {
+	Request  string
+	Response string
+}
+
+// DetectRPCPairs 从消息列表中识别 Request/Response 配对
+//
+// 识别规则：对任一以 "Request" 结尾的消息 XxxRequest，若存在同前缀的 XxxResponse
+// 则配对为一个 RPC；否则忽略（保留为单向 push）
+func DetectRPCPairs(msgs []MessageDef) []RPCPair {
+	names := make(map[string]struct{}, len(msgs))
+	for _, m := range msgs {
+		names[m.Name] = struct{}{}
+	}
+	var pairs []RPCPair
+	for _, m := range msgs {
+		if !strings.HasSuffix(m.Name, "Request") {
+			continue
+		}
+		resp := strings.TrimSuffix(m.Name, "Request") + "Response"
+		if _, ok := names[resp]; ok {
+			pairs = append(pairs, RPCPair{Request: m.Name, Response: resp})
+		}
+	}
+	return pairs
+}
+
+// GenerateCSharpRPCEnhance 生成 C# 强类型 RPC / Push 增强层
+// 追加在 C# Proto SDK 之后使用，与生成的 ProtoTypeRegistry + ProtobufCodecAdapter 协作
+func GenerateCSharpRPCEnhance(namespace string) ([]byte, error) {
+	tmpl, err := template.New("csrpc").Parse(csharpRPCEnhancedTemplate)
+	if err != nil {
+		return nil, fmt.Errorf("parse cs rpc template: %w", err)
+	}
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, struct{ Namespace string }{Namespace: namespace}); err != nil {
+		return nil, fmt.Errorf("execute cs rpc template: %w", err)
+	}
+	return buf.Bytes(), nil
+}
+
+// GenerateTSRPCEnhance 生成 TypeScript 强类型 RPC / Push 增强层
+//
+// 使用要求：生成结果应与已生成的 TypeScript SDK（含 MessageMap/MessageIDs）合并导入，
+// 即追加到 sdk-v2 或 proto-sdk 的输出文件尾部（同一模块内共享 MessageMap 类型）
+func GenerateTSRPCEnhance(msgs []MessageDef) ([]byte, error) {
+	tmpl, err := template.New("tsrpc").Parse(tsRPCEnhancedTemplate)
+	if err != nil {
+		return nil, fmt.Errorf("parse ts rpc template: %w", err)
+	}
+	data := struct {
+		Pairs []RPCPair
+	}{
+		Pairs: DetectRPCPairs(msgs),
+	}
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, data); err != nil {
+		return nil, fmt.Errorf("execute ts rpc template: %w", err)
+	}
+	return buf.Bytes(), nil
 }
 
 // GenerateUnityProtoExample 生成 Unity Protobuf 接入示例 MonoBehaviour

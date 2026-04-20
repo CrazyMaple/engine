@@ -135,24 +135,51 @@ func TestStressClusterNodeFailure(t *testing.T) {
 		}
 	})
 
+	// 诊断钩子：每秒 dump 一次各节点的成员视角
+	labels := make([]string, nodeCount)
+	recorders := make([]*MembershipRecorder, nodeCount)
 	for i := 0; i < nodeCount; i++ {
 		addr := seeds[i]
 		systems[i], remotes[i], clusters[i] = createNode(t, addr, clusterName, seeds, []string{"game"})
+		labels[i] = fmt.Sprintf("n%d", i)
+		recorders[i] = NewMembershipRecorder(systems[i], labels[i])
 		time.Sleep(200 * time.Millisecond) // 增加间隔，确保 TCP 监听就绪
 	}
+	dumper := StartCheckpointDumper(clusters[:], labels, 1*time.Second)
+	t.Cleanup(func() {
+		dumper.Stop()
+		for _, r := range recorders {
+			if r != nil {
+				r.Stop()
+			}
+		}
+	})
 
 	// 等待集群收敛（自适应超时：基础 10s + 每节点 5s）
-	// Gossip 收敛具有概率性，使用 Retry 在初始窗口未能收敛时再等一轮
+	// 使用事件驱动的 WaitMembersEventDriven 替换纯轮询：一旦收到 MemberJoined 立即重新评估，
+	// 避免 200ms 轮询窗口错过收敛瞬间导致假性超时。
 	convergeTimeout := AdaptiveTimeout(nodeCount, 10*time.Second, 5*time.Second)
 	t.Logf("等待集群收敛（自适应超时 %v）...", convergeTimeout)
 	converged := Retry(2, 1*time.Second, func() bool {
-		return waitForConvergence(t, clusters[:], nodeCount, convergeTimeout)
+		allConverged := true
+		for i, c := range clusters {
+			if !WaitMembersEventDriven(t, c, systems[i].EventStream, nodeCount, convergeTimeout) {
+				allConverged = false
+				break
+			}
+		}
+		if !allConverged {
+			// 兜底：轮询版检查，打印超时诊断快照
+			return waitForConvergence(t, clusters[:], nodeCount, 1*time.Second)
+		}
+		return true
 	})
 	if !converged {
 		for i, c := range clusters {
 			t.Logf("节点 %d 看到 %d 个成员", i, len(c.Members()))
 		}
-		t.Skip("Gossip 集群未能在超时时间内收敛 — 见 doc/v1.10 方向三 3.3 已知问题")
+		t.Logf("诊断快照:\n%s", dumper.Dump())
+		t.Skip("Gossip 集群未能在超时时间内收敛 — 见 doc/issue_stress_nodefailure.md")
 	}
 
 	// 验证所有节点看到完整成员列表
@@ -172,28 +199,25 @@ func TestStressClusterNodeFailure(t *testing.T) {
 	clusters[killIdx] = nil
 	remotes[killIdx] = nil
 
-	// 等待故障检测（自适应：基础 8s + 每节点 4s；带重试）
+	// 等待故障检测（自适应：基础 8s + 每节点 4s）。
+	// 使用 AwaitNodeLeft 订阅 MemberLeft/Dead 事件，避免 200ms 轮询导致的延迟观测。
 	faultTimeout := AdaptiveTimeout(nodeCount, 8*time.Second, 4*time.Second)
 	t.Logf("等待故障检测（自适应超时 %v）...", faultTimeout)
-	faultDetected := Retry(2, 500*time.Millisecond, func() bool {
-		return waitForCondition(t, faultTimeout, func() bool {
-			for i, c := range clusters {
-				if i == killIdx || c == nil {
-					continue
-				}
-				for _, m := range c.Members() {
-					if m.Address == seeds[killIdx] && m.Status == cluster.MemberAlive {
-						return false
-					}
-				}
-			}
-			return true
-		})
-	})
+	faultDetected := true
+	for i, c := range clusters {
+		if i == killIdx || c == nil {
+			continue
+		}
+		if !AwaitNodeLeft(systems[i].EventStream, c, seeds[killIdx], faultTimeout) {
+			faultDetected = false
+			break
+		}
+	}
 
 	// 故障检测结果记录（不强制失败，因为 gossip 收敛有概率性延迟）
 	if !faultDetected {
 		t.Log("警告：故障检测未在超时内完成，gossip 可能有延迟")
+		t.Logf("诊断快照:\n%s", dumper.Dump())
 	}
 
 	for i, c := range clusters {
@@ -209,12 +233,24 @@ func TestStressClusterNodeFailure(t *testing.T) {
 	systems[killIdx], remotes[killIdx], clusters[killIdx] = createNode(
 		t, seeds[killIdx], clusterName, seeds, []string{"game"},
 	)
+	recorders[killIdx] = NewMembershipRecorder(systems[killIdx], labels[killIdx])
 
-	// 等待重新加入（应恢复到完整 nodeCount 成员，自适应超时）
+	// 事件驱动等待重新加入（自适应超时）
 	rejoinTimeout := AdaptiveTimeout(nodeCount, 10*time.Second, 5*time.Second)
 	t.Logf("等待重新加入（自适应超时 %v）...", rejoinTimeout)
-	if !waitForConvergence(t, clusters[:], nodeCount, rejoinTimeout) {
+	rejoined := true
+	for i, c := range clusters {
+		if c == nil {
+			continue
+		}
+		if !WaitMembersEventDriven(t, c, systems[i].EventStream, nodeCount, rejoinTimeout) {
+			rejoined = false
+			break
+		}
+	}
+	if !rejoined {
 		t.Log("警告：重新加入后集群未完全收敛到全部成员")
+		t.Logf("诊断快照:\n%s", dumper.Dump())
 	}
 
 	// 验证重新加入后成员列表恢复

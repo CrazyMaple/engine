@@ -15,6 +15,7 @@ var commands = map[string]func(args []string) error{
 	"cluster":   cmdCluster,
 	"migrate":   cmdMigrate,
 	"audit":     cmdAudit,
+	"doctor":    cmdDoctor,
 }
 
 func main() {
@@ -52,6 +53,7 @@ func printUsage() {
   cluster     集群状态查看（status/nodes/health）
   migrate     Actor 迁移管理（actor/drain/status）
   audit       API 稳定性扫描 / CHANGELOG 生成（stability/changelog）
+  doctor      环境自检（Go 版本 / 配置 / 端口 / 服务 / 磁盘）
 
 使用 engine <command> -h 查看各命令帮助`)
 }

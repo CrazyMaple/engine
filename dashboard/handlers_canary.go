@@ -3,6 +3,7 @@ package dashboard
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 
 	"engine/cluster/canary"
 )
@@ -313,4 +314,111 @@ func (h *handlers) handleABStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, stats)
+}
+
+// ---- POST /api/ab/record ----
+// Body: {"experiment":"exp1","variant":"treatment","metric":"revenue","value":12.5}
+//	或  {"experiment":"exp1","variant":"treatment","metric":"click","success":true,"kind":"proportion"}
+
+func (h *handlers) handleABRecord(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "POST only")
+		return
+	}
+	abm := h.config.ABTestManager
+	if abm == nil {
+		writeError(w, http.StatusServiceUnavailable, "ab test manager not configured")
+		return
+	}
+	var body struct {
+		Experiment string   `json:"experiment"`
+		Variant    string   `json:"variant"`
+		Metric     string   `json:"metric"`
+		Kind       string   `json:"kind"`
+		Value      float64  `json:"value"`
+		Success    bool     `json:"success"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if body.Experiment == "" || body.Variant == "" || body.Metric == "" {
+		writeError(w, http.StatusBadRequest, "experiment, variant, metric required")
+		return
+	}
+	switch body.Kind {
+	case "", "continuous":
+		abm.RecordMetric(body.Experiment, body.Variant, body.Metric, body.Value)
+	case "proportion":
+		abm.RecordConversion(body.Experiment, body.Variant, body.Metric, body.Success)
+	default:
+		writeError(w, http.StatusBadRequest, "kind must be continuous or proportion")
+		return
+	}
+	writeJSON(w, map[string]string{"status": "ok"})
+}
+
+// ---- GET /api/ab/analyze?id=xxx&metric=xxx&kind=continuous|proportion[&control=xxx&treatment=xxx&alpha=0.05&min_sample=30] ----
+
+func (h *handlers) handleABAnalyze(w http.ResponseWriter, r *http.Request) {
+	abm := h.config.ABTestManager
+	if abm == nil {
+		writeError(w, http.StatusServiceUnavailable, "ab test manager not configured")
+		return
+	}
+	q := r.URL.Query()
+	id := q.Get("id")
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "id required")
+		return
+	}
+	opts := canary.AnalyzeOptions{
+		Metric:    q.Get("metric"),
+		Control:   q.Get("control"),
+		Treatment: q.Get("treatment"),
+		Kind:      q.Get("kind"),
+	}
+	if s := q.Get("alpha"); s != "" {
+		f, err := strconv.ParseFloat(s, 64)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "alpha must be a float")
+			return
+		}
+		opts.Alpha = f
+	}
+	if s := q.Get("min_sample"); s != "" {
+		n, err := strconv.Atoi(s)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "min_sample must be integer")
+			return
+		}
+		opts.MinSample = n
+	}
+	result, err := abm.Analyze(id, opts)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, result)
+}
+
+// ---- GET /api/ab/metrics?id=xxx ----
+
+func (h *handlers) handleABMetrics(w http.ResponseWriter, r *http.Request) {
+	abm := h.config.ABTestManager
+	if abm == nil {
+		writeError(w, http.StatusServiceUnavailable, "ab test manager not configured")
+		return
+	}
+	id := r.URL.Query().Get("id")
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "id required")
+		return
+	}
+	metrics := abm.ObservedMetrics(id)
+	if metrics == nil {
+		writeError(w, http.StatusNotFound, "experiment not found")
+		return
+	}
+	writeJSON(w, metrics)
 }

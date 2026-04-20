@@ -53,7 +53,12 @@
       "Bash(npm install *)",
       "Bash(node /usr/local/n/versions/node/24.11.1/lib/node_modules/@anthropic-ai/claude-code/install.cjs)",
       "Bash(node -e \"console.log\\(require\\('/usr/local/n/versions/node/24.11.1/lib/node_modules/@anthropic-ai/claude-code/package.json'\\).version\\)\")",
-      "Bash(npm view *)"
+      "Bash(npm view *)",
+      "Bash(go doc *)",
+      "Bash(git fsck *)",
+      "Bash(awk 'NR>=395 && NR<=744' /data/works/mindserver/qmcreator/code/engine/codegen/templates_proto_sdk.go)",
+      "Bash(/tmp/engine-bin doctor *)",
+      "Bash(echo \"exit=$?\")"
     ],
     "additionalDirectories": [
       "e:\\workspace\\qm\\qmserver\\.claude\\docs\\output\\funcdesc",

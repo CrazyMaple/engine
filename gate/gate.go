@@ -34,6 +34,11 @@ type Gate struct {
 	CertFile    string
 	KeyFile     string
 
+	// KCP 配置（可选；KCPAddr 为空表示不启用 KCP 接入）
+	// KCPConfig 为零值时使用 FastKCPConfig()（实时游戏场景默认）
+	KCPAddr   string
+	KCPConfig network.KCPConfig
+
 	// 版本协商（nil 表示不启用握手）
 	VersionNegotiator *VersionNegotiator
 
@@ -42,6 +47,7 @@ type Gate struct {
 
 	tcpServer *network.TCPServer
 	wsServer  *network.WSServer
+	kcpServer *network.KCPServer
 	system    *actor.ActorSystem
 	connCount int64 // 当前连接数（原子操作）
 }
@@ -98,6 +104,25 @@ func (g *Gate) Start() {
 		}
 		g.wsServer.Start()
 	}
+
+	if g.KCPAddr != "" {
+		cfg := g.KCPConfig
+		if cfg.Interval <= 0 {
+			cfg = network.FastKCPConfig()
+		}
+		g.kcpServer = &network.KCPServer{
+			Addr:       g.KCPAddr,
+			MaxConnNum: g.MaxConnNum,
+			Config:     cfg,
+			NewAgent:   g.newKCPAgent,
+		}
+		if err := g.kcpServer.Start(); err != nil {
+			log.Error("Gate KCP listener start failed on %s: %v", g.KCPAddr, err)
+			g.kcpServer = nil
+		} else {
+			log.Info("Gate KCP listener started on %s", g.KCPAddr)
+		}
+	}
 }
 
 // Close 关闭网关
@@ -107,6 +132,9 @@ func (g *Gate) Close() {
 	}
 	if g.wsServer != nil {
 		g.wsServer.Close()
+	}
+	if g.kcpServer != nil {
+		g.kcpServer.Close()
 	}
 }
 
@@ -152,6 +180,19 @@ func (g *Gate) newWSAgent(conn *network.WSConn) network.Agent {
 	return agent
 }
 
+func (g *Gate) newKCPAgent(conn *network.KCPConn) network.Agent {
+	atomic.AddInt64(&g.connCount, 1)
+	agent := &Agent{
+		conn:      conn,
+		gate:      g,
+		system:    g.system,
+		closeChan: make(chan struct{}),
+		transport: "kcp",
+	}
+	agent.initSecurity()
+	return agent
+}
+
 // initSecurity 初始化安全上下文并执行连接检查
 func (a *Agent) initSecurity() {
 	if a.gate.Security == nil {
@@ -180,9 +221,18 @@ type Agent struct {
 	actorPID        *actor.PID
 	userData        interface{}
 	closeChan       chan struct{}
-	protocolVersion int    // 协商后的协议版本（默认 1）
-	clientSDK       string // 客户端 SDK 标识
+	protocolVersion int              // 协商后的协议版本（默认 1）
+	clientSDK       string           // 客户端 SDK 标识
 	secCtx          *SecurityContext // 安全上下文
+	transport       string           // 传输类型："tcp" / "ws" / "kcp"；空字符串视为 tcp
+}
+
+// Transport 返回代理使用的底层传输类型（tcp / ws / kcp）
+func (a *Agent) Transport() string {
+	if a.transport == "" {
+		return "tcp"
+	}
+	return a.transport
 }
 
 // Run 运行代理

@@ -66,3 +66,13 @@ func DefaultSyncConfig() SyncConfig {
 		SnapshotInterval: 60,
 	}
 }
+
+// ResyncRequest 客户端请求全量快照（弱网恢复 / Delta 累积错误时使用）
+//
+// StateSyncRoom 收到该消息后将在下一个 Tick 前给指定玩家推送一次全量 Snapshot，
+// 并重置 DeltaEncoder 内部快照，后续帧重新从全量开始差分。
+type ResyncRequest struct {
+	PlayerID string
+	// Reason 可选标识，仅做日志 / 指标分类（例如 "timeout" / "checksum_mismatch"）
+	Reason string
+}

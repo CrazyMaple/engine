@@ -104,6 +104,72 @@ func TestGenerateTSProtoExample(t *testing.T) {
 	}
 }
 
+func TestDetectRPCPairs(t *testing.T) {
+	msgs, err := ParseFile("testdata/sample_messages.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pairs := DetectRPCPairs(msgs)
+	if len(pairs) != 1 {
+		t.Fatalf("expected 1 RPC pair, got %d: %+v", len(pairs), pairs)
+	}
+	if pairs[0].Request != "LoginRequest" || pairs[0].Response != "LoginResponse" {
+		t.Errorf("unexpected pair: %+v", pairs[0])
+	}
+}
+
+func TestGenerateTSRPCEnhance(t *testing.T) {
+	msgs, err := ParseFile("testdata/sample_messages.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, err := GenerateTSRPCEnhance(msgs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := string(code)
+
+	checks := []string{
+		"export interface RPCMap",
+		`LoginRequest: "LoginResponse";`,
+		"export class RPCClient",
+		"export class PushSubscriber",
+		"export class RPCTimeoutError",
+		"export class RPCAbortError",
+		"RPCCallOptions",
+		"timeoutMs",
+		"AbortSignal",
+		"__rpc_id",
+		"onPush<K extends keyof MessageMap>",
+		"once<K extends keyof MessageMap>",
+		"[Symbol.asyncIterator]",
+		"export function createRPC",
+		"export function createPush",
+	}
+	for _, s := range checks {
+		if !strings.Contains(out, s) {
+			t.Errorf("missing snippet %q", s)
+		}
+	}
+}
+
+func TestGenerateTSRPCEnhanceNoPairs(t *testing.T) {
+	// 仅有一个消息（无 Request/Response 对）时，RPCMap 应为空但不应报错
+	msgs := []MessageDef{{Name: "ChatMessage", ID: 1, Fields: nil}}
+	code, err := GenerateTSRPCEnhance(msgs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := string(code)
+	if !strings.Contains(out, "export interface RPCMap") {
+		t.Error("missing RPCMap interface")
+	}
+	// 无配对时，RPCPairs 对象不应包含任何键
+	if strings.Contains(out, "ChatMessage") {
+		t.Error("ChatMessage should not appear in RPCPairs when no response exists")
+	}
+}
+
 func TestGenerateUnityProtoExample(t *testing.T) {
 	code, err := GenerateUnityProtoExample("MyGame.Proto")
 	if err != nil {
