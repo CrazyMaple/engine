@@ -1,0 +1,334 @@
+package dashboard
+
+import (
+	"context"
+	"net/http"
+	"sync"
+	"time"
+
+	"engine/actor"
+	"engine/cluster"
+	"engine/cluster/canary"
+	"gamelib/config"
+	"gamelib/leaderboard"
+	"engine/log"
+	"gamelib/middleware"
+	"gamelib/replay"
+)
+
+// Config Dashboard 配置
+type Config struct {
+	// Addr HTTP 监听地址（默认 "127.0.0.1:8080"）
+	Addr string
+	// System ActorSystem 实例
+	System *actor.ActorSystem
+	// Cluster 集群实例（可选，为 nil 则不显示集群信息）
+	Cluster *cluster.Cluster
+	// Metrics 指标收集器（可选）
+	Metrics *middleware.Metrics
+	// HotTracker 热点 Actor 追踪器（可选）
+	HotTracker *HotActorTracker
+	// TraceStore 追踪记录存储（可选，为 nil 则不支持追踪查询）
+	TraceStore *middleware.TraceStore
+	// MetricsRegistry 指标注册中心（可选，提供更完整的 Prometheus 指标）
+	MetricsRegistry *middleware.MetricsRegistry
+	// MetricsHistory 消息流量历史（可选，提供趋势图数据）
+	MetricsHistory *MetricsHistory
+	// ConfigManager 配置管理器（可选，支持在线查看和重载配置）
+	ConfigManager *config.Manager
+	// AuditLog 审计日志（可选）
+	AuditLog *AuditLog
+	// Auth 访问鉴权配置（可选，nil 则无鉴权）
+	Auth *AuthConfig
+	// DeadLetterMonitor 死信监控器（可选）
+	DeadLetterMonitor *actor.DeadLetterMonitor
+	// HealthChecker 健康检查管理器（可选，注册 /healthz 和 /readyz 端点）
+	HealthChecker *HealthChecker
+	// LivePush Dashboard v3 实时 WebSocket 推送配置（可选）
+	LivePush *LivePushConfig
+	// Profiler 性能分析器（可选，支持按需/自动 Profiling）
+	Profiler *middleware.Profiler
+	// ActorProfiler Actor 级别 Profiling（可选，支持每 Actor 消息耗时统计）
+	ActorProfiler *middleware.ActorProfiler
+	// CanaryEngine 灰度发布引擎（可选，支持灰度规则和权重路由）
+	CanaryEngine *canary.Engine
+	// CanaryComparator 灰度指标对比器（可选，支持版本间指标对比）
+	CanaryComparator *canary.Comparator
+	// GMManager GM 管理后台（可选，支持 GM 命令、权限控制、批量操作）
+	GMManager *GMManager
+	// BTDebugRegistry 行为树调试注册表（可选，支持行为树执行路径可视化）
+	BTDebugRegistry *BTDebugRegistry
+	// CanaryRuleEngine 增强规则引擎（可选，支持 AND/OR 组合条件）
+	CanaryRuleEngine *canary.RuleEngine
+	// ABTestManager A/B 测试管理器（可选，支持实验创建和变体分配）
+	ABTestManager *canary.ABTestManager
+	// LogRingBuffer 日志环形缓冲（可选，启用 /api/log/query 接口）
+	LogRingBuffer *log.RingBufferSink
+	// LogBroadcast 实时日志广播 Sink（可选，启用 /ws/log WebSocket 流）
+	LogBroadcast *log.BroadcastSink
+	// AlertManager 告警管理器（可选，启用 /api/alerts 接口）
+	AlertManager *AlertManager
+	// ReplayDir 回放文件根目录（可选，启用 /api/replay 接口）
+	ReplayDir string
+	// ReplayArchiver 回放冷数据归档器（可选，启用 /api/replay/archive 接口）
+	ReplayArchiver *replay.Archiver
+	// ChainedAudit 哈希链审计日志（可选，启用 /api/audit/chained/* 接口）
+	ChainedAudit *ChainedAuditLog
+	// ConfirmationMgr 高危操作二次确认码管理器（可选，启用 /api/audit/confirm/* 接口）
+	ConfirmationMgr *ConfirmationManager
+	// SpanExporter 内存 Span 导出器（可选，启用 /api/trace/chain 和 /api/trace/active 接口）
+	SpanExporter *middleware.InMemorySpanExporter
+	// HotProfiler 热点 Actor 滑动窗口画像器（可选，启用 /api/profile/hotactors 和 /api/profile/candidates 接口）
+	HotProfiler *actor.HotActorProfiler
+	// SeasonManager 排行榜赛季管理器（可选，启用 /api/leaderboard/season/* 接口）
+	SeasonManager *leaderboard.SeasonManager
+}
+
+// Dashboard Web 管理面板
+type Dashboard struct {
+	config   Config
+	server   *http.Server
+	livePush *LivePushServer
+	started  bool
+	mu       sync.Mutex
+}
+
+// New 创建 Dashboard
+func New(cfg Config) *Dashboard {
+	if cfg.Addr == "" {
+		cfg.Addr = "127.0.0.1:8080"
+	}
+	return &Dashboard{config: cfg}
+}
+
+// Start 启动 Dashboard HTTP 服务
+func (d *Dashboard) Start() error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	if d.started {
+		return nil
+	}
+
+	// 初始化 v3 WebSocket 实时推送（路由注册前创建）
+	if d.config.LivePush != nil {
+		d.livePush = NewLivePushServer(d.config, *d.config.LivePush)
+	}
+
+	mux := http.NewServeMux()
+	d.registerRoutes(mux)
+
+	var handler http.Handler = mux
+	if d.config.Auth != nil {
+		handler = authMiddleware(d.config.Auth, mux)
+	}
+
+	d.server = &http.Server{
+		Addr:         d.config.Addr,
+		Handler:      handler,
+		ReadTimeout:  10 * time.Second,
+		WriteTimeout: 10 * time.Second,
+	}
+
+	go func() {
+		log.Info("Dashboard started on %s", d.config.Addr)
+		if err := d.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Error("Dashboard error: %v", err)
+		}
+	}()
+
+	// 启动 v3 WebSocket 实时推送
+	if d.livePush != nil {
+		d.livePush.Start()
+	}
+
+	d.started = true
+	return nil
+}
+
+// Stop 停止 Dashboard
+func (d *Dashboard) Stop() error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	if !d.started {
+		return nil
+	}
+
+	// 停止 v3 LivePush
+	if d.livePush != nil {
+		d.livePush.Stop()
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	err := d.server.Shutdown(ctx)
+	d.started = false
+	log.Info("Dashboard stopped")
+	return err
+}
+
+func (d *Dashboard) registerRoutes(mux *http.ServeMux) {
+	h := &handlers{config: d.config}
+
+	mux.HandleFunc("/", h.handleIndex)
+	mux.HandleFunc("/api/system", h.handleSystem)
+	mux.HandleFunc("/api/actors", h.handleActors)
+	mux.HandleFunc("/api/actors/", h.handleActorChildren)
+	mux.HandleFunc("/api/cluster", h.handleCluster)
+	mux.HandleFunc("/api/cluster/members", h.handleClusterMembers)
+	mux.HandleFunc("/api/metrics", h.handleMetrics)
+	mux.HandleFunc("/api/metrics/prometheus", h.handleMetricsPrometheus)
+	mux.HandleFunc("/api/hotactors", h.handleHotActors)
+	mux.HandleFunc("/api/runtime", h.handleRuntime)
+	mux.HandleFunc("/api/actors/topology", h.handleActorTopology)
+	mux.HandleFunc("/api/traces", h.handleTraces)
+	if d.config.SpanExporter != nil {
+		mux.HandleFunc("/api/trace/chain", h.handleTraceChain)
+		mux.HandleFunc("/api/trace/active", h.handleTraceActive)
+	}
+	if d.config.HotProfiler != nil {
+		mux.HandleFunc("/api/profile/hotactors", h.handleProfileHotActors)
+		mux.HandleFunc("/api/profile/candidates", h.handleProfileCandidates)
+	}
+	mux.HandleFunc("/api/metrics/history", h.handleMetricsHistory)
+	mux.HandleFunc("/api/cluster/graph", h.handleClusterGraph)
+	mux.HandleFunc("/api/actors/flamegraph", h.handleFlameGraph)
+	mux.HandleFunc("/api/config", h.handleConfig)
+	mux.HandleFunc("/api/config/reload", h.handleConfigReload)
+	mux.HandleFunc("/api/audit", h.handleAuditLog)
+	mux.HandleFunc("/api/log/level", h.handleLogLevel)
+	mux.HandleFunc("/api/deadletters", h.handleDeadLetters)
+
+	// v3 新增路由
+	mux.HandleFunc("/api/report", h.handleReportJSON)
+	mux.HandleFunc("/api/report.csv", h.handleReportCSV)
+	mux.HandleFunc("/api/actors/heatmap", h.handleHeatmap)
+
+	// WebSocket 实时推送（v3）
+	if d.livePush != nil {
+		mux.HandleFunc("/ws/live", d.livePush.HandleWebSocket)
+	}
+
+	// Profiler 端点（按需/自动 Profiling + Actor 级别分析）
+	if d.config.Profiler != nil {
+		mux.HandleFunc("/api/profiler/cpu", h.handleProfilerCPU)
+		mux.HandleFunc("/api/profiler/heap", h.handleProfilerHeap)
+		mux.HandleFunc("/api/profiler/goroutine", h.handleProfilerGoroutine)
+		mux.HandleFunc("/api/profiler/block", h.handleProfilerBlock)
+		mux.HandleFunc("/api/profiler/list", h.handleProfilerList)
+		mux.HandleFunc("/api/profiler/get", h.handleProfilerGet)
+		mux.HandleFunc("/api/profiler/diff", h.handleProfilerDiff)
+		mux.HandleFunc("/api/profiler/auto/config", h.handleProfilerAutoConfig)
+	}
+	if d.config.ActorProfiler != nil {
+		mux.HandleFunc("/api/profiler/actors", h.handleProfilerActors)
+		mux.HandleFunc("/api/profiler/actors/enable", h.handleProfilerActorsEnable)
+		mux.HandleFunc("/api/profiler/actors/disable", h.handleProfilerActorsDisable)
+	}
+
+	// 灰度发布端点
+	if d.config.CanaryEngine != nil {
+		mux.HandleFunc("/api/canary/status", h.handleCanaryStatus)
+		mux.HandleFunc("/api/canary/rules", h.handleCanaryRules)
+		mux.HandleFunc("/api/canary/weights", h.handleCanaryWeights)
+		mux.HandleFunc("/api/canary/promote", h.handleCanaryPromote)
+		mux.HandleFunc("/api/canary/rollback", h.handleCanaryRollback)
+	}
+	if d.config.CanaryComparator != nil {
+		mux.HandleFunc("/api/canary/compare", h.handleCanaryCompare)
+	}
+
+	// 灰度增强规则引擎端点
+	if d.config.CanaryRuleEngine != nil {
+		mux.HandleFunc("/api/canary/advanced_rules", h.handleCanaryAdvancedRules)
+		mux.HandleFunc("/api/canary/rule_hits", h.handleCanaryRuleHits)
+	}
+	// A/B 测试端点
+	if d.config.ABTestManager != nil {
+		mux.HandleFunc("/api/ab/experiments", h.handleABExperiments)
+		mux.HandleFunc("/api/ab/experiment", h.handleABExperiment)
+		mux.HandleFunc("/api/ab/assign", h.handleABAssign)
+		mux.HandleFunc("/api/ab/stats", h.handleABStats)
+		mux.HandleFunc("/api/ab/record", h.handleABRecord)
+		mux.HandleFunc("/api/ab/analyze", h.handleABAnalyze)
+		mux.HandleFunc("/api/ab/metrics", h.handleABMetrics)
+	}
+
+	// GM 管理后台端点
+	if d.config.GMManager != nil {
+		gmHandlers := NewGMHandlers(d.config.GMManager)
+		gmHandlers.RegisterRoutes(mux)
+	}
+
+	// 行为树调试端点
+	if d.config.BTDebugRegistry != nil {
+		mux.HandleFunc("/api/bt/list", h.handleBTList)
+		mux.HandleFunc("/api/bt/detail", h.handleBTDetail)
+		mux.HandleFunc("/api/bt/stats", h.handleBTStats)
+	}
+
+	// 健康检查端点（与 Dashboard 复用端口）
+	if d.config.HealthChecker != nil {
+		RegisterHealthRoutes(mux, d.config.HealthChecker)
+	}
+
+	// 日志查询端点
+	if d.config.LogRingBuffer != nil {
+		mux.HandleFunc("/api/log/query", h.handleLogQuery)
+		mux.HandleFunc("/api/log/stats", h.handleLogStats)
+	}
+
+	// 实时日志 WebSocket 推送
+	if d.config.LogBroadcast != nil {
+		mux.HandleFunc("/ws/log", h.handleLogWS)
+	}
+
+	// 告警端点
+	if d.config.AlertManager != nil {
+		mux.HandleFunc("/api/alerts/rules", h.handleAlertRules)
+		mux.HandleFunc("/api/alerts/active", h.handleAlertActive)
+		mux.HandleFunc("/api/alerts/history", h.handleAlertHistory)
+		mux.HandleFunc("/api/alerts/silence", h.handleAlertSilence)
+		mux.HandleFunc("/api/alerts/ack", h.handleAlertAck)
+	}
+
+	// 拓扑交互端点（依赖集群已配置）
+	if d.config.Cluster != nil {
+		mux.HandleFunc("/api/topology/node", h.handleTopologyNode)
+		mux.HandleFunc("/api/topology/migrate", h.handleTopologyMigrate)
+		mux.HandleFunc("/api/topology/drain", h.handleTopologyDrain)
+	}
+
+	// 回放管理端点
+	if d.config.ReplayDir != "" {
+		mux.HandleFunc("/api/replay/list", h.handleReplayList)
+		mux.HandleFunc("/api/replay/get", h.handleReplayGet)
+		mux.HandleFunc("/api/replay/delete", h.handleReplayDelete)
+	}
+
+	// 回放归档管理端点
+	if d.config.ReplayArchiver != nil {
+		mux.HandleFunc("/api/replay/archive/list", h.handleReplayArchiveList)
+		mux.HandleFunc("/api/replay/archive/run", h.handleReplayArchiveRun)
+		mux.HandleFunc("/api/replay/archive/fetch", h.handleReplayArchiveFetch)
+		mux.HandleFunc("/api/replay/archive/delete", h.handleReplayArchiveDelete)
+	}
+
+	// 审计合规增强端点（哈希链 + 导出 + 二次确认）
+	if d.config.ChainedAudit != nil || d.config.ConfirmationMgr != nil {
+		aeh := NewAuditEnhancedHandlers(d.config.ChainedAudit, d.config.ConfirmationMgr)
+		aeh.RegisterRoutes(mux)
+	}
+
+	// 排行榜赛季管理
+	if d.config.SeasonManager != nil {
+		mux.HandleFunc("/api/leaderboard/season/current", h.handleSeasonCurrent)
+		mux.HandleFunc("/api/leaderboard/season/register", h.handleSeasonRegister)
+		mux.HandleFunc("/api/leaderboard/season/settle", h.handleSeasonSettle)
+		mux.HandleFunc("/api/leaderboard/season/history", h.handleSeasonHistory)
+		mux.HandleFunc("/api/leaderboard/season/snapshot", h.handleSeasonSnapshot)
+		mux.HandleFunc("/api/leaderboard/season/cross", h.handleSeasonCrossQuery)
+	}
+}

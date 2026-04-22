@@ -58,7 +58,22 @@
       "Bash(git fsck *)",
       "Bash(awk 'NR>=395 && NR<=744' /data/works/mindserver/qmcreator/code/engine/codegen/templates_proto_sdk.go)",
       "Bash(/tmp/engine-bin doctor *)",
-      "Bash(echo \"exit=$?\")"
+      "Bash(echo \"exit=$?\")",
+      "Bash(chmod +x /data/works/mindserver/qmcreator/code/engine/split_v1.12.sh)",
+      "Bash(bash /data/works/mindserver/qmcreator/code/engine/split_v1.12.sh --phase 1)",
+      "Bash(bash split_v1.12.sh --phase 1)",
+      "Bash(bash split_v1.12.sh --phase 1 --apply)",
+      "Bash(bash split_v1.12.sh --phase 2 --apply)",
+      "Bash(mv ../gamelib/log ./log)",
+      "Bash(mv ../gamelib/telemetry ./telemetry)",
+      "Bash(bash split_v1.12.sh --phase 3 --apply)",
+      "Bash(awk '{print $1}')",
+      "Bash([ -d \"/data/works/mindserver/qmcreator/code/engine/engine/$d\" ])",
+      "Bash(awk -F'/' '{print $2\"/\"$3}')",
+      "Bash(git rm *)",
+      "Bash(go work *)",
+      "Bash(git ls-tree *)",
+      "Bash(git check-ignore *)"
     ],
     "additionalDirectories": [
       "e:\\workspace\\qm\\qmserver\\.claude\\docs\\output\\funcdesc",

@@ -1,94 +1,78 @@
-# CLAUDE.md
+# CLAUDE.md — 容器根指引
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+本仓库自 v1.12 起采用 **engine / gamelib / tool 三层** 拆分，容器根 `code/engine/` 只是 git 仓库根 + `go.work` 聚合点，**自身不再是 Go module**。
 
-## Project Overview
+## 三层定位
 
-Engine — 基于 Actor 模型的 Go 游戏后端引擎（`engine`），融合 Proto.Actor 的分布式能力和 Leaf 的游戏开发便利性。Go 1.24+，核心模块零外部依赖。
+| 层 | module | 定位 | 详细说明 |
+|---|---|---|---|
+| A | `engine/` | Actor + 分布式骨架（最小闭环） | `engine/CLAUDE.md` |
+| B | `gamelib/` | 游戏侧通用功能运行时 | `gamelib/CLAUDE.md` |
+| C | `tool/` | 开发 / 运维期可执行工具 | `tool/CLAUDE.md` |
 
-## Build & Test Commands
+## 依赖方向铁律（v1.12 §2.4）
 
-```bash
-# 安装依赖
-go mod tidy
+```
+tool   ──▶ gamelib ──▶ engine
+ │                        ▲
+ └────────────────────────┘   (tool 也可直接依赖 engine)
 
-# 构建全部
-go build ./...
-
-# 运行全部测试
-go test ./...
-
-# 运行单个包测试
-go test ./actor/...
-
-# 运行单个测试函数
-go test ./actor/... -run TestXxx
-
-# 运行基准测试
-go test ./actor/... -bench=. -benchmem
-
-# 代码生成工具（消息注册/TypeScript绑定）
-go run codegen/cmd/msggen/main.go
-
-# 运行示例 - 远程通信
-go run example/remote_example.go server   # 节点1
-go run example/remote_example.go client   # 节点2
+engine   不得 import gamelib / tool
+gamelib  不得 import tool
+better/  不被任何 module import
 ```
 
-## Architecture
+CI 守护：`cd tool && go run ./cmd/engine doctor deps --root ..` 必须零违规。
 
-### 消息流转路径
+## go.work 用法
 
-`ctx.Send(pid, msg)` → Envelope(含sender) → ProcessRegistry(本地) 或 RemoteProcess(远程) → 目标Actor Mailbox → Dispatcher调度 → 系统消息优先处理 → 用户消息 → Behavior函数处理
+```bash
+# 在仓库根执行（= 本文件所在目录）
+go work sync                 # 同步三个 module 的 require 集合
 
-### 核心层（Phase 1-2，已完成）
+# 构建
+(cd engine && go build ./...)
+(cd gamelib && go build ./...)
+(cd tool && go build ./...)
 
-- **`actor/`** — Actor 系统核心。ActorCell = Process + Context；PID 寻址（本地 `id` / 远程 `address:port/id`）；Props 构建 Actor 配置（dispatcher、mailbox、supervisor）；BehaviorStack 支持 Become/BecomeStacked 行为切换；Envelope 对象池减少 GC。
-- **`remote/`** — 分布式通信，基于 TCP（非 gRPC）。EndpointManager 管理连接池和自动重连；RemoteProcess 实现 Process 接口做远程代理；TypeRegistry 做消息类型序列化注册；支持 HMAC 签名和 TLS。
-- **`network/`** — TCP/WebSocket 传输层，长度分帧消息解析（MsgParser），连接池管理。
-- **`internal/`** — MPSC 无锁队列（mailbox 底层）。
+# 测试
+(cd engine && go test ./...)
+(cd gamelib && go test ./...)
+(cd tool && go test ./...)
+```
 
-### 集群层（Phase 3）
+> 若 `go.work` 中某个 module 未就位（缺 `go.mod`），`go work sync` 会直接报错；此时先按 v1.12 计划补齐骨架。
 
-- **`cluster/`** — Gossip 协议拓扑管理，一致性哈希路由。
-- **`grain/`** — 虚拟 Actor 模式，(Kind, Identity) 定位，按需激活。
-- **`router/`** — 路由策略：Broadcast、RoundRobin、ConsistentHash。
-- **`pubsub/`** — 基于 Topic 的发布订阅。
+## 容器根目录结构
 
-### 游戏引擎层（Phase 4）
+```
+code/engine/
+├── go.work                # use (./engine ./gamelib ./tool)
+├── go.work.sum
+├── README.md
+├── CLAUDE.md              # 本文件，只描述容器级约束
+├── .gitignore
+├── doc/                   # 版本路线图与完成度审核
+├── better/                # 只读参考（Leaf / Proto.Actor 源码，不编译、不引用）
+├── engine/                # A 类 module
+├── gamelib/               # B 类 module
+└── tool/                  # C 类 module
+```
 
-- **`scene/`** — 场景管理 + Grid 空间分区（AOI 兴趣区域）。
-- **`ecs/`** — Entity Component System，World/Entity/Component 抽象。
-- **`config/`** — RecordFile（Tab 分隔）和 JSON 配置加载。
-- **`persistence/`** — 状态持久化，Storage 接口支持 MemoryStorage 和 MongoStorage。
-
-### 基础设施
-
-- **`gate/`** — 客户端网关（TCP/WebSocket），Agent 处理连接，Processor 路由消息。
-- **`codec/`** — 消息编解码（JSON 实现）。
-- **`middleware/`** — Actor 消息管道装饰器（日志、指标、ACL、签名验证）。
-- **`dashboard/`** — Web 运维面板，REST API + HotActor 热更新。
-- **`timer/`** — 定时器系统。
-- **`codegen/`** — 从 `//msggen:message` 注解的 Go struct 生成注册代码和 TypeScript 类型。
-- **`better/`** — 参考实现（vendored Leaf 和 ProtoActor 源码），不直接编译进项目。
-- **`errors/`** — 引擎级统一错误类型（ConnectError/TimeoutError/AuthError/ClusterError/CodecError）。
-- **`cluster/provider/`** — 外部服务发现（Consul、etcd、K8s Provider）。
+Phase 6 预留的 `demo_game/` 与 `server/` 上线后同样落在本目录下，并加入 `go.work`。
 
 ## better/ 目录规则
 
-`better/` 为参考实现目录（vendored Leaf 和 ProtoActor 源码），遵循以下规则：
+`better/` 为参考实现目录（vendored Leaf 和 Proto.Actor 源码），遵循：
 
-1. **不参与项目编译**：不直接编译进引擎产物，仅作为设计参考和对比基准
-2. **不参与需求审核**：审核功能完成度时，不将 `better/` 下的代码计入已完成项
-3. **不参与测试统计**：`better/` 下的测试失败不影响引擎整体测试状态评估
-4. **不计入代码量**：统计项目代码量时排除 `better/` 目录
-5. **只读参考**：可查阅实现思路，但新代码应在引擎对应模块中独立实现，不得直接复制或 import
+1. **不参与编译**：不进入任何 module 产物；
+2. **不参与审核**：审核功能完成度时不计入已完成项；
+3. **不参与测试统计**：`better/` 下测试失败不影响整体测试状态；
+4. **不计入代码量**：统计 LOC 时排除；
+5. **只读参考**：新代码应在 engine/gamelib/tool 对应模块内独立实现，**不得 import**。
 
-## Key Design Patterns
+## 版本与路线图
 
-- **Actor-First**: 一切皆 Actor，所有交互通过消息传递
-- **位置透明**: 本地/远程 Actor 使用相同 `ctx.Send(pid, msg)` API
-- **监管树**: 父 Actor 监管子 Actor 故障，Directive 策略（Resume/Restart/Stop/Escalate）
-- **Middleware 链**: 可堆叠的消息处理装饰器
-- **Props 构建模式**: Actor 配置蓝图（dispatcher、mailbox、supervisor strategy）
-- **Envelope 对象池**: 消息封装复用，减少 GC 压力
+- 路线图与每个大版本完成度审核一律放 `doc/`；
+- 当前基线：**v1.12 · 三层拆分**（2026-04-21，完成度见 `doc/v1.12_完成度审核.md`）；
+- 各层内部细节（消息流、模块清单、设计模式）请看对应层的 `CLAUDE.md`，本文件不再复述。
