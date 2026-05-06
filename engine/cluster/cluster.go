@@ -6,23 +6,24 @@ import (
 	"time"
 
 	"engine/actor"
-	"engine/cluster/federation"
-	engerr "engine/errors"
 	"engine/log"
 	"engine/remote"
 )
 
-// Cluster 集群管理器
+// Cluster 集群协调入口
+//
+// v1.13 收缩后职责：启动 Provider → 接收成员快照 → 更新 MemberList →
+// 更新 ConsistentHash → 发布 ClusterTopologyEvent。
+// 不再直接持有 gossip / splitbrain / federation / migration 等运维实现，
+// 这些一律由外部（gamelib / tool）按 Provider 契约或独立组件提供。
 type Cluster struct {
 	system     *actor.ActorSystem
 	remote     *remote.Remote
 	config     *ClusterConfig
 	memberList *MemberList
-	gossiper   *Gossiper
 	hashRing   *ConsistentHash
 	self       *Member
-	gossipPID  *actor.PID
-	splitBrain *SplitBrainDetector
+	provider   Provider
 	started    bool
 	mu         sync.RWMutex
 }
@@ -36,7 +37,6 @@ func NewCluster(system *actor.ActorSystem, r *remote.Remote, config *ClusterConf
 		hashRing: NewConsistentHash(),
 	}
 
-	// 创建本节点信息
 	c.self = &Member{
 		Address:  config.Address,
 		Id:       generateNodeId(config.Address),
@@ -47,12 +47,23 @@ func NewCluster(system *actor.ActorSystem, r *remote.Remote, config *ClusterConf
 	}
 
 	c.memberList = NewMemberList(c)
-	c.gossiper = NewGossiper(c)
 
 	return c
 }
 
-// Start 启动集群
+// Start 启动集群。
+//
+// 行为（见 ADR v1.13-001 §2.2 / §2.5）：
+//  1. 选定 Provider：优先 config.Provider，否则用 SeedNodes 构造 StaticProvider；
+//  2. 把自己加入 MemberList（保证单节点集群也有可见成员）；
+//  3. 订阅 ClusterTopologyEvent 以更新一致性哈希环；
+//  4. 在调用 Provider.Start 之前先 type-assert 扩展能力（决定后续是否调
+//     Register/Deregister）；扩展能力检测不持久化字段，避免反向耦合；
+//  5. 调 Provider.Start：成员快照通过 onChange 回调送达 ApplySnapshot；
+//  6. 如果 Provider 是 RegistrableProvider，紧接着调用 Register(self)；
+//     注册失败 → fail-fast：回滚 Provider.Stop 并返回错误，避免出现
+//     "Cluster.Start 成功但本节点未注册到服务发现后端" 的隐性错误状态；
+//  7. Provider 启动失败本身亦 fail-fast，不允许 fallback。
 func (c *Cluster) Start() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -61,76 +72,44 @@ func (c *Cluster) Start() error {
 		return nil
 	}
 
-	// 注册 Gossip 消息类型到远程类型注册表
-	remote.RegisterType(&GossipRequest{})
-	remote.RegisterType(&GossipResponse{})
-	remote.RegisterType(&GossipState{})
-	remote.RegisterType(&MemberGossipState{})
-
-	// 创建 Gossip Actor
-	gossipProps := actor.PropsFromProducer(func() actor.Actor {
-		return &gossipActor{gossiper: c.gossiper}
-	})
-	c.gossipPID = c.system.Root.SpawnNamed(gossipProps, "cluster/gossip")
-
-	// 将自己加入成员列表
-	c.memberList.UpdateMember(&MemberGossipState{
-		Address: c.self.Address,
-		Id:      c.self.Id,
-		Kinds:   c.self.Kinds,
-		Status:  MemberAlive,
-		Seq:     c.self.Seq,
-	})
-
-	// 更新哈希环
+	c.memberList.UpdateMember(c.self.Clone())
 	c.updateHashRing()
 
-	// 监听拓扑变更事件以更新哈希环
 	c.system.EventStream.Subscribe(func(event interface{}) {
 		if _, ok := event.(*ClusterTopologyEvent); ok {
 			c.updateHashRing()
 		}
 	})
 
-	// 启动 Gossip 协议
-	c.gossiper.Start()
+	provider := c.config.Provider
+	if provider == nil {
+		provider = NewStaticProvider(c.config.SeedNodes...)
+	}
 
-	// 使用 Provider 或种子节点进行成员发现
-	if c.config.Provider != nil {
-		if err := c.config.Provider.Start(c.config.ClusterName, c.self, func(members []*Member) {
-			for _, m := range members {
-				if m.Address == c.self.Address {
-					continue
-				}
-				c.memberList.UpdateMember(&MemberGossipState{
-					Address: m.Address,
-					Id:      m.Id,
-					Kinds:   m.Kinds,
-					Status:  m.Status,
-					Seq:     m.Seq,
-				})
+	// ADR 001 §2.2：在 Provider.Start 之前判断扩展能力，
+	// 不持有具体扩展接口字段。
+	registrable, _ := provider.(RegistrableProvider)
+
+	onChange := func(members []*Member) {
+		c.memberList.ApplySnapshot(members, c.self.Id)
+		c.updateHashRing()
+	}
+
+	if err := provider.Start(c.config.ClusterName, c.self, onChange); err != nil {
+		return fmt.Errorf("cluster provider %T start: %w", provider, err)
+	}
+
+	if registrable != nil {
+		if err := registrable.Register(c.self); err != nil {
+			// fail-fast：回滚 Provider.Stop，确保进程态与可观察态一致。
+			if stopErr := provider.Stop(); stopErr != nil {
+				log.Error("cluster provider stop after register failure: %v", stopErr)
 			}
-			c.updateHashRing()
-		}); err != nil {
-			log.Error("Failed to start cluster provider: %v", &engerr.ClusterError{
-				Op: "provider.start", Node: c.self.Address, Cause: err,
-			})
-			c.connectToSeeds() // 回退到种子节点
-		} else if err := c.config.Provider.Register(); err != nil {
-			log.Error("Failed to register with cluster provider: %v", &engerr.ClusterError{
-				Op: "provider.register", Node: c.self.Address, Cause: err,
-			})
+			return fmt.Errorf("cluster provider %T register: %w", provider, err)
 		}
-	} else {
-		c.connectToSeeds()
 	}
 
-	// 启动脑裂检测器（如果配置了）
-	if c.config.SplitBrain != nil && c.config.SplitBrain.Enabled {
-		c.splitBrain = NewSplitBrainDetector(c, c.config.SplitBrain)
-		c.splitBrain.Start()
-	}
-
+	c.provider = provider
 	c.started = true
 	log.Info("Cluster started: %s, node: %s (%s), kinds: %v",
 		c.config.ClusterName, c.self.Address, c.self.Id, c.config.Kinds)
@@ -138,7 +117,7 @@ func (c *Cluster) Start() error {
 	return nil
 }
 
-// Stop 优雅停止集群
+// Stop 优雅停止集群。
 func (c *Cluster) Stop() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -147,32 +126,20 @@ func (c *Cluster) Stop() {
 		return
 	}
 
-	// 设置自身为离开状态
 	c.self.Status = MemberLeft
 	c.self.Seq++
-	c.gossiper.SetMemberState(c.self)
 
-	// 最后一轮 Gossip 通知其他节点
-	c.gossiper.gossipOnce()
-	time.Sleep(100 * time.Millisecond)
-
-	// 从服务发现中注销
-	if c.config.Provider != nil {
-		c.config.Provider.Deregister()
-		c.config.Provider.Stop()
+	if c.provider != nil {
+		if reg, ok := c.provider.(RegistrableProvider); ok {
+			if err := reg.Deregister(c.self); err != nil {
+				log.Error("cluster provider deregister: %v", err)
+			}
+		}
+		if err := c.provider.Stop(); err != nil {
+			log.Error("cluster provider stop: %v", err)
+		}
+		c.provider = nil
 	}
-
-	// 停止脑裂检测器
-	if c.splitBrain != nil {
-		c.splitBrain.Stop()
-		c.splitBrain = nil
-	}
-
-	// 停止 Gossip
-	c.gossiper.Stop()
-
-	// 停止 Gossip Actor
-	c.system.Root.Stop(c.gossipPID)
 
 	c.started = false
 	log.Info("Cluster stopped: %s", c.self.Address)
@@ -213,73 +180,10 @@ func (c *Cluster) Config() *ClusterConfig {
 	return c.config
 }
 
-// connectToSeeds 连接种子节点，异步重试直到成功或集群停止
-func (c *Cluster) connectToSeeds() {
-	if len(c.config.SeedNodes) == 0 {
-		return
-	}
-
-	// 在后台重试连接种子节点，间隔与 GossipInterval 一致
-	go func() {
-		maxRetries := 30 // 最多重试 30 次
-		for i := 0; i < maxRetries; i++ {
-			// 检查集群是否已停止
-			c.mu.RLock()
-			started := c.started
-			c.mu.RUnlock()
-			if !started && i > 0 {
-				return
-			}
-
-			// 检查是否已经有其他成员（说明已收敛）
-			members := c.memberList.GetMembers()
-			otherCount := 0
-			for _, m := range members {
-				if m.Id != c.self.Id {
-					otherCount++
-				}
-			}
-			if otherCount > 0 {
-				return // 已经发现其他节点，不再重试
-			}
-
-			state := c.gossiper.GetState()
-			for _, seed := range c.config.SeedNodes {
-				if seed == c.config.Address {
-					continue
-				}
-				target := actor.NewPID(seed, "cluster/gossip")
-				c.remote.Send(target, c.gossipPID, &GossipRequest{
-					ClusterName: c.config.ClusterName,
-					State:       state,
-				}, 0)
-			}
-
-			if i == 0 {
-				log.Info("Connecting to seed nodes: %v", c.config.SeedNodes)
-			}
-
-			time.Sleep(c.config.GossipInterval)
-		}
-	}()
-}
-
 // updateHashRing 更新一致性哈希环
 func (c *Cluster) updateHashRing() {
 	members := c.memberList.GetMembers()
 	c.hashRing.UpdateMembers(members)
-}
-
-// StartFederation 初始化并启动跨集群联邦网关
-func (c *Cluster) StartFederation(cfg *federation.FederationConfig) (*federation.Gateway, error) {
-	if !c.started {
-		return nil, fmt.Errorf("cluster must be started before federation")
-	}
-	gw := federation.NewGateway(c.system, c.remote, cfg)
-	if err := gw.Start(); err != nil {
-		return nil, fmt.Errorf("start federation gateway: %w", err)
-	}
-	return gw, nil
 }
 
 // generateNodeId 基于地址和时间生成节点 ID

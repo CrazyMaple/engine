@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"engine/log"
+	"tool/logstore"
 )
 
 // ---- GET /api/log/query ----
@@ -22,7 +23,7 @@ func (h *handlers) handleLogQuery(w http.ResponseWriter, r *http.Request) {
 	}
 
 	q := r.URL.Query()
-	filter := log.QueryFilter{
+	filter := logstore.QueryFilter{
 		TraceID:   q.Get("trace_id"),
 		Actor:     q.Get("actor"),
 		NodeID:    q.Get("node"),

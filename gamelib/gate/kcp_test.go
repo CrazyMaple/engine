@@ -11,6 +11,7 @@ import (
 
 	"engine/actor"
 	"engine/network"
+	"gamelib/network/kcp"
 )
 
 // echoProcessor 简单回显处理器
@@ -64,7 +65,7 @@ func TestGateKCPEchoEndToEnd(t *testing.T) {
 	g := NewGate(system)
 	g.KCPAddr = freeUDPPort(t)
 	g.Processor = proc
-	g.KCPConfig = network.FastKCPConfig()
+	g.KCPConfig = kcp.FastKCPConfig()
 	g.Start()
 	defer g.Close()
 
@@ -184,7 +185,7 @@ func TestGateKCPClientBadAddr(t *testing.T) {
 	if _, err := NewKCPClient(""); err == nil {
 		t.Fatal("NewKCPClient(\"\") should error")
 	}
-	if _, err := NewKCPClientWithConfig("", network.FastKCPConfig()); err == nil {
+	if _, err := NewKCPClientWithConfig("", kcp.FastKCPConfig()); err == nil {
 		t.Fatal("NewKCPClientWithConfig(\"\", ...) should error")
 	}
 }

@@ -283,12 +283,17 @@ func (inv *Inventory) GetSlot(slotIndex int) (*ItemStack, bool) {
 	return &cp, true
 }
 
-// AllItems 获取所有道具（槽位快照）
+// AllItems 获取所有道具（槽位快照）。
+// 按 SlotIndex 升序返回，调用方可以稳定地按槽位顺序遍历——尤其在
+// SortByType 等整理操作之后，map 迭代顺序无法反映槽位排序结果。
 func (inv *Inventory) AllItems() []ItemStack {
 	result := make([]ItemStack, 0, len(inv.slots))
 	for _, s := range inv.slots {
 		result = append(result, *s)
 	}
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].SlotIndex < result[j].SlotIndex
+	})
 	return result
 }
 

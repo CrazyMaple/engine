@@ -8,13 +8,14 @@ import (
 	"time"
 
 	"engine/log"
+	"tool/logstore"
 )
 
 func TestHandleLogQuery(t *testing.T) {
-	rb := log.NewRingBufferSink(8)
+	rb := logstore.NewRingBufferSink(8)
 	now := time.Now()
-	_ = rb.Write(log.LogEntry{Time: now, Level: log.LevelInfo, Msg: "a", TraceID: "t1"})
-	_ = rb.Write(log.LogEntry{Time: now.Add(time.Second), Level: log.LevelError, Msg: "b", TraceID: "t2"})
+	_ = rb.Write(logstore.LogEntry{Time: now, Level: log.LevelInfo, Msg: "a", TraceID: "t1"})
+	_ = rb.Write(logstore.LogEntry{Time: now.Add(time.Second), Level: log.LevelError, Msg: "b", TraceID: "t2"})
 
 	h := &handlers{config: Config{LogRingBuffer: rb}}
 
@@ -44,9 +45,9 @@ func TestHandleLogQuery(t *testing.T) {
 }
 
 func TestHandleLogStats(t *testing.T) {
-	rb := log.NewRingBufferSink(4)
+	rb := logstore.NewRingBufferSink(4)
 	for i := 0; i < 3; i++ {
-		_ = rb.Write(log.LogEntry{Msg: "m"})
+		_ = rb.Write(logstore.LogEntry{Msg: "m"})
 	}
 	h := &handlers{config: Config{LogRingBuffer: rb}}
 	req := httptest.NewRequest(http.MethodGet, "/api/log/stats", nil)

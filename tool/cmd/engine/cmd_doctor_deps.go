@@ -58,6 +58,8 @@ func cmdDoctorDeps(args []string) error {
 	fs := flag.NewFlagSet("doctor-deps", flag.ExitOnError)
 	root := fs.String("root", ".", "仓库根目录（含 engine/ gamelib/ tool/ 的容器根）")
 	format := fs.String("format", "text", "输出格式：text|json")
+	baselinePath := fs.String("baseline", "", "（v1.13）以此 JSON 为模板写当前快照（刷新 import_baseline.value）")
+	checkBaselinePath := fs.String("check-baseline", "", "（v1.13）按 baseline JSON 校验当前仓库；mode=freeze 仅禁止新增、mode=zero 全部清零")
 	fs.Parse(args)
 
 	absRoot, err := filepath.Abs(*root)
@@ -65,6 +67,29 @@ func cmdDoctorDeps(args []string) error {
 		return fmt.Errorf("解析 root: %w", err)
 	}
 
+	// v1.13 baseline 子模式：互斥
+	if *baselinePath != "" && *checkBaselinePath != "" {
+		return fmt.Errorf("--baseline 与 --check-baseline 互斥，不可同时使用")
+	}
+	if *baselinePath != "" {
+		if err := runBaselineSnapshot(absRoot, *baselinePath); err != nil {
+			return err
+		}
+		fmt.Printf("baseline 快照已写入 %s\n", *baselinePath)
+		return nil
+	}
+	if *checkBaselinePath != "" {
+		violations, err := runBaselineCheck(absRoot, *checkBaselinePath)
+		if err != nil {
+			return err
+		}
+		if violations > 0 {
+			os.Exit(1)
+		}
+		return nil
+	}
+
+	// 默认：v1.12 依赖方向铁律体检
 	rep, err := runDepsCheck(absRoot)
 	if err != nil {
 		return err

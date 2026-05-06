@@ -9,8 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"gamelib/config"
 	"engine/log"
+	"gamelib/config"
+	"tool/logstore"
 )
 
 // allocPort 分配一个可用 TCP 端口（关闭后返回端口号）
@@ -253,7 +254,7 @@ type testSubscriber struct {
 	ch chan string
 }
 
-func (t *testSubscriber) Notify(entry log.LogEntry) {
+func (t *testSubscriber) Notify(entry logstore.LogEntry) {
 	select {
 	case t.ch <- entry.Msg:
 	default:

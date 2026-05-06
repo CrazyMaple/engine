@@ -7,7 +7,23 @@ import (
 
 	"engine/actor"
 	"engine/remote"
+	"gamelib/remote/security"
 )
+
+// makeCipher 创建一个一次性 AES-256-GCM 密码器，供 endpoint 集成基准使用。
+// 加密实现 benchmark 已迁 gamelib/remote/security/cipher_bench_test.go。
+func makeCipher(b *testing.B, keyID uint32) *security.AESGCMCipher {
+	b.Helper()
+	key := make([]byte, 32)
+	if _, err := rand.Read(key); err != nil {
+		b.Fatal(err)
+	}
+	c, err := security.NewAESGCMCipher(key, keyID)
+	if err != nil {
+		b.Fatal(err)
+	}
+	return c
+}
 
 // 端到端基准：Remote Endpoint 加密模式 vs 非加密端到端对比。
 // 由于完整 TCP/TLS 链路依赖真实端口，这里以本地 in-memory pipe 模拟

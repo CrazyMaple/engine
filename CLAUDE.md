@@ -54,6 +54,7 @@ code/engine/
 ├── .gitignore
 ├── doc/                   # 版本路线图与完成度审核
 ├── better/                # 只读参考（Leaf / Proto.Actor 源码，不编译、不引用）
+├── engine_sample/         # 只读参考（旧版样例工程，不编译、不引用）
 ├── engine/                # A 类 module
 ├── gamelib/               # B 类 module
 └── tool/                  # C 类 module
@@ -61,18 +62,21 @@ code/engine/
 
 Phase 6 预留的 `demo_game/` 与 `server/` 上线后同样落在本目录下，并加入 `go.work`。
 
-## better/ 目录规则
+## 参考目录规则（better/、engine_sample/）
 
-`better/` 为参考实现目录（vendored Leaf 和 Proto.Actor 源码），遵循：
+`better/`（vendored Leaf / Proto.Actor 源码）与 `engine_sample/`（旧版样例工程）共同视为只读参考目录，遵循同一份 7 条规则：
 
 1. **不参与编译**：不进入任何 module 产物；
 2. **不参与审核**：审核功能完成度时不计入已完成项；
-3. **不参与测试统计**：`better/` 下测试失败不影响整体测试状态；
+3. **不参与测试统计**：`better/` 与 `engine_sample/` 下测试失败不影响整体测试状态；
 4. **不计入代码量**：统计 LOC 时排除；
-5. **只读参考**：新代码应在 engine/gamelib/tool 对应模块内独立实现，**不得 import**。
+5. **不参与 doctor deps**：必须写入 `doc/v1.13_dep_baseline.json` 的 `exclude_paths`；
+6. **只读参考**：新代码应在 engine / gamelib / tool 对应 module 内独立实现，**不得 import**；
+7. **嵌套 module 一并排除**：目录下任何嵌套 `go.mod`（如 `better/protoactor-go-dev/examples/*/go.mod`）按目录前缀整体排除，不参与三 module 的 `go test ./...`，**禁止使用 `find . -name go.mod` 全仓自动发现**。
 
 ## 版本与路线图
 
 - 路线图与每个大版本完成度审核一律放 `doc/`；
-- 当前基线：**v1.12 · 三层拆分**（2026-04-21，完成度见 `doc/v1.12_完成度审核.md`）；
+- 当前基线：**v1.13 · engine 精简收口**（2026-05-06，完成度见 `doc/v1.13_完成度审核.md`，执行依据 `doc/v2.1_执行手册.md`）；
+- 上一基线：**v1.12 · 三层拆分**（2026-04-21，完成度见 `doc/v1.12_完成度审核.md`）；
 - 各层内部细节（消息流、模块清单、设计模式）请看对应层的 `CLAUDE.md`，本文件不再复述。

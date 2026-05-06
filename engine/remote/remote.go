@@ -17,8 +17,9 @@ type Remote struct {
 	server        *network.TCPServer
 	started       bool
 	mu            sync.RWMutex
-	// Signer 可选的消息签名器，启用后远程消息将进行 HMAC 签名/验签
-	Signer        *MessageSigner
+	// Signer 可选的消息签名器，启用后远程消息将由该 signer 进行签名 / 验签；
+	// 具体算法（HMAC-SHA256 / Ed25519 等）由 gamelib/remote/security 提供实现。
+	Signer        MessageSigner
 	// TLSCfg 可选的 TLS 配置，启用后远程通信使用 TLS 加密
 	TLSCfg        *network.TLSConfig
 	// Codec 可选的编解码器，nil 使用 JSON 兜底
@@ -149,8 +150,6 @@ func (r *Remote) GetAddress() string {
 	return r.address
 }
 
-const hmacSize = 32 // SHA256 HMAC 签名长度
-
 // remoteAgent 处理远程连接的Agent
 type remoteAgent struct {
 	conn   *network.TCPConn
@@ -167,14 +166,19 @@ func (a *remoteAgent) Run() {
 
 		// 如果启用签名验证，先验证并剥离签名
 		if a.remote.Signer != nil {
-			if len(data) < hmacSize {
+			sigSize := a.remote.Signer.SignatureSize()
+			if sigSize <= 0 {
+				log.Error("%v", &engerr.AuthError{Reason: "signer SignatureSize must be > 0"})
+				continue
+			}
+			if len(data) < sigSize {
 				log.Error("%v", &engerr.AuthError{Reason: "message too short for signature"})
 				continue
 			}
-			payload := data[:len(data)-hmacSize]
-			sig := data[len(data)-hmacSize:]
+			payload := data[:len(data)-sigSize]
+			sig := data[len(data)-sigSize:]
 			if !a.remote.Signer.Verify(payload, sig) {
-				log.Error("%v", &engerr.AuthError{Reason: "HMAC signature mismatch"})
+				log.Error("%v", &engerr.AuthError{Reason: "signature mismatch"})
 				continue
 			}
 			data = payload

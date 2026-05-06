@@ -4,6 +4,7 @@ import (
 	"errors"
 
 	"engine/network"
+	"gamelib/network/kcp"
 )
 
 // KCP 接入层说明
@@ -21,18 +22,18 @@ func NewKCPClient(addr string) (network.Conn, error) {
 	if addr == "" {
 		return nil, errors.New("gate: kcp client addr required")
 	}
-	return network.DialKCP(addr, network.FastKCPConfig())
+	return kcp.DialKCP(addr, kcp.FastKCPConfig())
 }
 
 // NewKCPClientWithConfig 允许调用方指定完整的 KCP 参数（含 NoDelay / Interval / 窗口大小等）
-func NewKCPClientWithConfig(addr string, cfg network.KCPConfig) (network.Conn, error) {
+func NewKCPClientWithConfig(addr string, cfg kcp.KCPConfig) (network.Conn, error) {
 	if addr == "" {
 		return nil, errors.New("gate: kcp client addr required")
 	}
 	if cfg.Interval <= 0 {
-		cfg = network.FastKCPConfig()
+		cfg = kcp.FastKCPConfig()
 	}
-	return network.DialKCP(addr, cfg)
+	return kcp.DialKCP(addr, cfg)
 }
 
 // IsKCP 判断 Agent 是否运行在 KCP 传输之上
@@ -42,11 +43,11 @@ func IsKCP(a *Agent) bool {
 
 // KCPConn 若 Agent 底层为 KCPConn 则返回该连接，便于调用方做 NoDelay 等高级配置
 // 非 KCP 连接返回 nil
-func KCPConn(a *Agent) *network.KCPConn {
+func KCPConn(a *Agent) *kcp.KCPConn {
 	if a == nil {
 		return nil
 	}
-	if kc, ok := a.conn.(*network.KCPConn); ok {
+	if kc, ok := a.conn.(*kcp.KCPConn); ok {
 		return kc
 	}
 	return nil

@@ -3,7 +3,7 @@
 // 应用层协议：JSON 消息（每条含 "type" 字段）
 //
 //   - TCP（默认 :8000）：4 字节大端长度前缀 + JSON 载荷（与 C# TcpTransport 对齐）
-//   - KCP（默认 :9100）：使用 engine/network KCPServer，按 KCP 原生消息边界传输 JSON 载荷（与 kcp2k 客户端对齐）
+//   - KCP（默认 :9100）：使用 gamelib/network/kcp KCPServer，按 KCP 原生消息边界传输 JSON 载荷（与 kcp2k 客户端对齐）
 //
 // 业务：登录 / 位置同步 / 世界聊天 / 定时排行榜推送
 //
@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"engine/network"
+	"gamelib/network/kcp"
 )
 
 // ============================================================
@@ -247,7 +248,7 @@ func runTCP(h *hub, addr string) {
 
 type kcpAgent struct {
 	hub  *hub
-	conn *network.KCPConn
+	conn *kcp.KCPConn
 	sess *session
 }
 
@@ -279,11 +280,11 @@ func (a *kcpAgent) OnClose() {
 }
 
 func runKCP(h *hub, addr string) {
-	srv := &network.KCPServer{
+	srv := &kcp.KCPServer{
 		Addr:       addr,
 		MaxConnNum: 1024,
-		Config:     network.FastKCPConfig(),
-		NewAgent: func(c *network.KCPConn) network.Agent {
+		Config:     kcp.FastKCPConfig(),
+		NewAgent: func(c *kcp.KCPConn) network.Agent {
 			return &kcpAgent{hub: h, conn: c}
 		},
 	}

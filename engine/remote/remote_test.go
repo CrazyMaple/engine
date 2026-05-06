@@ -131,57 +131,109 @@ func TestDefaultTypeRegistry(t *testing.T) {
 	}
 }
 
-// === MessageSigner 测试 ===
+// === MessageSigner 接口测试（使用 fake 覆盖签名 / 验签失败路径）===
+//
+// 具体算法（HMAC-SHA256）的回归测试归 gamelib/remote/security/。
 
-func TestMessageSignerSignVerify(t *testing.T) {
-	signer := NewMessageSigner([]byte("secret-key"))
+// fakeSigner 在测试中模拟一个可控制成功 / 失败的 signer。
+type fakeSigner struct {
+	sigBytes []byte
+	verifyOK bool
+	signCalled, verifyCalled int
+}
 
-	data := []byte("hello world")
-	sig := signer.Sign(data)
-
-	if len(sig) != 32 { // SHA256 = 32 bytes
-		t.Fatalf("expected 32 byte signature, got %d", len(sig))
+func (f *fakeSigner) Sign(payload []byte) []byte {
+	f.signCalled++
+	if f.sigBytes == nil {
+		// 默认按签名长度返回零值，避免 nil 与 len 校验冲突
+		return make([]byte, f.SignatureSize())
 	}
+	return append([]byte(nil), f.sigBytes...)
+}
 
-	if !signer.Verify(data, sig) {
-		t.Fatal("valid signature should verify")
+func (f *fakeSigner) Verify(payload, sig []byte) bool {
+	f.verifyCalled++
+	return f.verifyOK
+}
+
+func (f *fakeSigner) SignatureSize() int {
+	if f.sigBytes != nil {
+		return len(f.sigBytes)
+	}
+	return 8
+}
+
+func TestFakeSigner_SignProducesSignatureSizeBytes(t *testing.T) {
+	signer := &fakeSigner{sigBytes: []byte("12345678")}
+	sig := signer.Sign([]byte("hello"))
+	if len(sig) != signer.SignatureSize() {
+		t.Fatalf("Sign output length %d != SignatureSize %d", len(sig), signer.SignatureSize())
 	}
 }
 
-func TestMessageSignerTampered(t *testing.T) {
-	signer := NewMessageSigner([]byte("secret-key"))
-
-	data := []byte("hello world")
-	sig := signer.Sign(data)
-
-	// 篡改数据
-	tampered := []byte("hello worlD")
-	if signer.Verify(tampered, sig) {
-		t.Fatal("tampered data should not verify")
+func TestFakeSigner_VerifySuccess(t *testing.T) {
+	signer := &fakeSigner{sigBytes: []byte("12345678"), verifyOK: true}
+	if !signer.Verify([]byte("payload"), signer.Sign([]byte("payload"))) {
+		t.Fatal("expected verify success")
 	}
 }
 
-func TestMessageSignerWrongKey(t *testing.T) {
-	signer1 := NewMessageSigner([]byte("key1"))
-	signer2 := NewMessageSigner([]byte("key2"))
-
-	data := []byte("hello world")
-	sig := signer1.Sign(data)
-
-	if signer2.Verify(data, sig) {
-		t.Fatal("different key should not verify")
+func TestFakeSigner_VerifyFailure(t *testing.T) {
+	signer := &fakeSigner{sigBytes: []byte("12345678"), verifyOK: false}
+	if signer.Verify([]byte("payload"), signer.Sign([]byte("payload"))) {
+		t.Fatal("expected verify failure")
 	}
 }
 
-func TestMessageSignerDeterministic(t *testing.T) {
-	signer := NewMessageSigner([]byte("key"))
-	data := []byte("test data")
+// === MessageCipher 接口测试（使用 fake 覆盖加密失败路径）===
 
-	sig1 := signer.Sign(data)
-	sig2 := signer.Sign(data)
+// fakeCipher 模拟可控制 Encrypt / Decrypt 失败的 cipher。
+type fakeCipher struct {
+	encryptErr error
+	decryptErr error
+	encrypted  []byte
+	decrypted  []byte
+	keyID      uint32
+}
 
-	if string(sig1) != string(sig2) {
-		t.Fatal("same data should produce same signature")
+func (f *fakeCipher) Encrypt(plaintext []byte) ([]byte, error) {
+	if f.encryptErr != nil {
+		return nil, f.encryptErr
+	}
+	if f.encrypted != nil {
+		return append([]byte(nil), f.encrypted...), nil
+	}
+	// 默认透传，便于 roundtrip 校验
+	out := make([]byte, len(plaintext))
+	copy(out, plaintext)
+	return out, nil
+}
+
+func (f *fakeCipher) Decrypt(data []byte) ([]byte, error) {
+	if f.decryptErr != nil {
+		return nil, f.decryptErr
+	}
+	if f.decrypted != nil {
+		return append([]byte(nil), f.decrypted...), nil
+	}
+	out := make([]byte, len(data))
+	copy(out, data)
+	return out, nil
+}
+
+func (f *fakeCipher) KeyID() uint32 { return f.keyID }
+
+func TestFakeCipher_EncryptError(t *testing.T) {
+	c := &fakeCipher{encryptErr: errors.New("encrypt boom")}
+	if _, err := c.Encrypt([]byte("x")); err == nil {
+		t.Fatal("expected encrypt error to surface")
+	}
+}
+
+func TestFakeCipher_DecryptError(t *testing.T) {
+	c := &fakeCipher{decryptErr: errors.New("decrypt boom")}
+	if _, err := c.Decrypt([]byte("x")); err == nil {
+		t.Fatal("expected decrypt error to surface")
 	}
 }
 

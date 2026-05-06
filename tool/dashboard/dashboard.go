@@ -8,12 +8,12 @@ import (
 
 	"engine/actor"
 	"engine/cluster"
-	"engine/cluster/canary"
+	"engine/log"
 	"gamelib/config"
 	"gamelib/leaderboard"
-	"engine/log"
 	"gamelib/middleware"
 	"gamelib/replay"
+	"tool/logstore"
 )
 
 // Config Dashboard 配置
@@ -50,22 +50,14 @@ type Config struct {
 	Profiler *middleware.Profiler
 	// ActorProfiler Actor 级别 Profiling（可选，支持每 Actor 消息耗时统计）
 	ActorProfiler *middleware.ActorProfiler
-	// CanaryEngine 灰度发布引擎（可选，支持灰度规则和权重路由）
-	CanaryEngine *canary.Engine
-	// CanaryComparator 灰度指标对比器（可选，支持版本间指标对比）
-	CanaryComparator *canary.Comparator
 	// GMManager GM 管理后台（可选，支持 GM 命令、权限控制、批量操作）
 	GMManager *GMManager
 	// BTDebugRegistry 行为树调试注册表（可选，支持行为树执行路径可视化）
 	BTDebugRegistry *BTDebugRegistry
-	// CanaryRuleEngine 增强规则引擎（可选，支持 AND/OR 组合条件）
-	CanaryRuleEngine *canary.RuleEngine
-	// ABTestManager A/B 测试管理器（可选，支持实验创建和变体分配）
-	ABTestManager *canary.ABTestManager
 	// LogRingBuffer 日志环形缓冲（可选，启用 /api/log/query 接口）
-	LogRingBuffer *log.RingBufferSink
+	LogRingBuffer *logstore.RingBufferSink
 	// LogBroadcast 实时日志广播 Sink（可选，启用 /ws/log WebSocket 流）
-	LogBroadcast *log.BroadcastSink
+	LogBroadcast *logstore.BroadcastSink
 	// AlertManager 告警管理器（可选，启用 /api/alerts 接口）
 	AlertManager *AlertManager
 	// ReplayDir 回放文件根目录（可选，启用 /api/replay 接口）
@@ -78,8 +70,6 @@ type Config struct {
 	ConfirmationMgr *ConfirmationManager
 	// SpanExporter 内存 Span 导出器（可选，启用 /api/trace/chain 和 /api/trace/active 接口）
 	SpanExporter *middleware.InMemorySpanExporter
-	// HotProfiler 热点 Actor 滑动窗口画像器（可选，启用 /api/profile/hotactors 和 /api/profile/candidates 接口）
-	HotProfiler *actor.HotActorProfiler
 	// SeasonManager 排行榜赛季管理器（可选，启用 /api/leaderboard/season/* 接口）
 	SeasonManager *leaderboard.SeasonManager
 }
@@ -188,10 +178,6 @@ func (d *Dashboard) registerRoutes(mux *http.ServeMux) {
 		mux.HandleFunc("/api/trace/chain", h.handleTraceChain)
 		mux.HandleFunc("/api/trace/active", h.handleTraceActive)
 	}
-	if d.config.HotProfiler != nil {
-		mux.HandleFunc("/api/profile/hotactors", h.handleProfileHotActors)
-		mux.HandleFunc("/api/profile/candidates", h.handleProfileCandidates)
-	}
 	mux.HandleFunc("/api/metrics/history", h.handleMetricsHistory)
 	mux.HandleFunc("/api/cluster/graph", h.handleClusterGraph)
 	mux.HandleFunc("/api/actors/flamegraph", h.handleFlameGraph)
@@ -226,34 +212,6 @@ func (d *Dashboard) registerRoutes(mux *http.ServeMux) {
 		mux.HandleFunc("/api/profiler/actors", h.handleProfilerActors)
 		mux.HandleFunc("/api/profiler/actors/enable", h.handleProfilerActorsEnable)
 		mux.HandleFunc("/api/profiler/actors/disable", h.handleProfilerActorsDisable)
-	}
-
-	// 灰度发布端点
-	if d.config.CanaryEngine != nil {
-		mux.HandleFunc("/api/canary/status", h.handleCanaryStatus)
-		mux.HandleFunc("/api/canary/rules", h.handleCanaryRules)
-		mux.HandleFunc("/api/canary/weights", h.handleCanaryWeights)
-		mux.HandleFunc("/api/canary/promote", h.handleCanaryPromote)
-		mux.HandleFunc("/api/canary/rollback", h.handleCanaryRollback)
-	}
-	if d.config.CanaryComparator != nil {
-		mux.HandleFunc("/api/canary/compare", h.handleCanaryCompare)
-	}
-
-	// 灰度增强规则引擎端点
-	if d.config.CanaryRuleEngine != nil {
-		mux.HandleFunc("/api/canary/advanced_rules", h.handleCanaryAdvancedRules)
-		mux.HandleFunc("/api/canary/rule_hits", h.handleCanaryRuleHits)
-	}
-	// A/B 测试端点
-	if d.config.ABTestManager != nil {
-		mux.HandleFunc("/api/ab/experiments", h.handleABExperiments)
-		mux.HandleFunc("/api/ab/experiment", h.handleABExperiment)
-		mux.HandleFunc("/api/ab/assign", h.handleABAssign)
-		mux.HandleFunc("/api/ab/stats", h.handleABStats)
-		mux.HandleFunc("/api/ab/record", h.handleABRecord)
-		mux.HandleFunc("/api/ab/analyze", h.handleABAnalyze)
-		mux.HandleFunc("/api/ab/metrics", h.handleABMetrics)
 	}
 
 	// GM 管理后台端点

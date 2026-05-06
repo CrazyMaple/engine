@@ -11,6 +11,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"engine/log"
+	"tool/logstore"
 )
 
 // wsURL 把 http:// 测试服务器 URL 转成 ws:// 路径
@@ -51,7 +52,7 @@ func readPayload(t *testing.T, conn *websocket.Conn, deadline time.Duration) *lo
 }
 
 // waitSubscribers 等待 sink 完成订阅注册（异步 handler 生命周期）
-func waitSubscribers(t *testing.T, bs *log.BroadcastSink, want int, deadline time.Duration) {
+func waitSubscribers(t *testing.T, bs *logstore.BroadcastSink, want int, deadline time.Duration) {
 	t.Helper()
 	end := time.Now().Add(deadline)
 	for time.Now().Before(end) {
@@ -88,7 +89,7 @@ func TestLogWS_NotConfigured(t *testing.T) {
 
 // TestLogWS_EndToEnd 订阅后 Write 的日志应被推送到客户端
 func TestLogWS_EndToEnd(t *testing.T) {
-	bs := log.NewBroadcastSink()
+	bs := logstore.NewBroadcastSink()
 	srv := newWSServer(Config{LogBroadcast: bs})
 	defer srv.Close()
 
@@ -97,7 +98,7 @@ func TestLogWS_EndToEnd(t *testing.T) {
 	waitSubscribers(t, bs, 1, time.Second)
 
 	now := time.Now()
-	_ = bs.Write(log.LogEntry{Time: now, Level: log.LevelInfo, Msg: "hello"})
+	_ = bs.Write(logstore.LogEntry{Time: now, Level: log.LevelInfo, Msg: "hello"})
 
 	p := readPayload(t, conn, 2*time.Second)
 	if p == nil {
@@ -113,7 +114,7 @@ func TestLogWS_EndToEnd(t *testing.T) {
 
 // TestLogWS_FilterByTraceID 订阅时只收到匹配的 trace_id
 func TestLogWS_FilterByTraceID(t *testing.T) {
-	bs := log.NewBroadcastSink()
+	bs := logstore.NewBroadcastSink()
 	srv := newWSServer(Config{LogBroadcast: bs})
 	defer srv.Close()
 
@@ -121,8 +122,8 @@ func TestLogWS_FilterByTraceID(t *testing.T) {
 	defer conn.Close()
 	waitSubscribers(t, bs, 1, time.Second)
 
-	_ = bs.Write(log.LogEntry{Msg: "nope", TraceID: "t-other"})
-	_ = bs.Write(log.LogEntry{Msg: "yes", TraceID: "t-want"})
+	_ = bs.Write(logstore.LogEntry{Msg: "nope", TraceID: "t-other"})
+	_ = bs.Write(logstore.LogEntry{Msg: "yes", TraceID: "t-want"})
 
 	p := readPayload(t, conn, 2*time.Second)
 	if p == nil {
@@ -140,7 +141,7 @@ func TestLogWS_FilterByTraceID(t *testing.T) {
 
 // TestLogWS_FilterByLevel level 过滤
 func TestLogWS_FilterByLevel(t *testing.T) {
-	bs := log.NewBroadcastSink()
+	bs := logstore.NewBroadcastSink()
 	srv := newWSServer(Config{LogBroadcast: bs})
 	defer srv.Close()
 
@@ -148,9 +149,9 @@ func TestLogWS_FilterByLevel(t *testing.T) {
 	defer conn.Close()
 	waitSubscribers(t, bs, 1, time.Second)
 
-	_ = bs.Write(log.LogEntry{Msg: "info", Level: log.LevelInfo})
-	_ = bs.Write(log.LogEntry{Msg: "warn", Level: log.LevelWarn})
-	_ = bs.Write(log.LogEntry{Msg: "err1", Level: log.LevelError})
+	_ = bs.Write(logstore.LogEntry{Msg: "info", Level: log.LevelInfo})
+	_ = bs.Write(logstore.LogEntry{Msg: "warn", Level: log.LevelWarn})
+	_ = bs.Write(logstore.LogEntry{Msg: "err1", Level: log.LevelError})
 
 	p := readPayload(t, conn, 2*time.Second)
 	if p == nil || p.Msg != "err1" {
@@ -160,7 +161,7 @@ func TestLogWS_FilterByLevel(t *testing.T) {
 
 // TestLogWS_FilterByMsg msg 子串过滤
 func TestLogWS_FilterByMsg(t *testing.T) {
-	bs := log.NewBroadcastSink()
+	bs := logstore.NewBroadcastSink()
 	srv := newWSServer(Config{LogBroadcast: bs})
 	defer srv.Close()
 
@@ -168,8 +169,8 @@ func TestLogWS_FilterByMsg(t *testing.T) {
 	defer conn.Close()
 	waitSubscribers(t, bs, 1, time.Second)
 
-	_ = bs.Write(log.LogEntry{Msg: "skip this"})
-	_ = bs.Write(log.LogEntry{Msg: "has target in it"})
+	_ = bs.Write(logstore.LogEntry{Msg: "skip this"})
+	_ = bs.Write(logstore.LogEntry{Msg: "has target in it"})
 
 	p := readPayload(t, conn, 2*time.Second)
 	if p == nil || !strings.Contains(p.Msg, "target") {
@@ -179,7 +180,7 @@ func TestLogWS_FilterByMsg(t *testing.T) {
 
 // TestLogWS_Unsubscribe 客户端断开后应解除订阅
 func TestLogWS_Unsubscribe(t *testing.T) {
-	bs := log.NewBroadcastSink()
+	bs := logstore.NewBroadcastSink()
 	srv := newWSServer(Config{LogBroadcast: bs})
 	defer srv.Close()
 
@@ -192,7 +193,7 @@ func TestLogWS_Unsubscribe(t *testing.T) {
 
 // TestMatchWSFilter 覆盖 matchWSFilter 各分支
 func TestMatchWSFilter(t *testing.T) {
-	e := log.LogEntry{
+	e := logstore.LogEntry{
 		TraceID: "t1",
 		NodeID:  "n1",
 		Actor:   "/user/a",
@@ -200,25 +201,25 @@ func TestMatchWSFilter(t *testing.T) {
 		Msg:     "hello world",
 	}
 
-	if !matchWSFilter(e, log.QueryFilter{}) {
+	if !matchWSFilter(e, logstore.QueryFilter{}) {
 		t.Fatal("empty filter should match")
 	}
-	if matchWSFilter(e, log.QueryFilter{TraceID: "other"}) {
+	if matchWSFilter(e, logstore.QueryFilter{TraceID: "other"}) {
 		t.Fatal("trace_id mismatch should reject")
 	}
-	if matchWSFilter(e, log.QueryFilter{NodeID: "n2"}) {
+	if matchWSFilter(e, logstore.QueryFilter{NodeID: "n2"}) {
 		t.Fatal("node mismatch should reject")
 	}
-	if !matchWSFilter(e, log.QueryFilter{Actor: "user"}) {
+	if !matchWSFilter(e, logstore.QueryFilter{Actor: "user"}) {
 		t.Fatal("actor substring should match")
 	}
-	if matchWSFilter(e, log.QueryFilter{MinLevel: log.LevelError}) {
+	if matchWSFilter(e, logstore.QueryFilter{MinLevel: log.LevelError}) {
 		t.Fatal("below min level should reject")
 	}
-	if matchWSFilter(e, log.QueryFilter{MsgSubstr: "xyz"}) {
+	if matchWSFilter(e, logstore.QueryFilter{MsgSubstr: "xyz"}) {
 		t.Fatal("msg substr mismatch should reject")
 	}
-	if !matchWSFilter(e, log.QueryFilter{MsgSubstr: "hello"}) {
+	if !matchWSFilter(e, logstore.QueryFilter{MsgSubstr: "hello"}) {
 		t.Fatal("msg substr match should pass")
 	}
 }

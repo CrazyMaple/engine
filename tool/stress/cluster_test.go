@@ -198,6 +198,7 @@ func TestStressClusterNodeFailure(t *testing.T) {
 	remotes[killIdx].Stop()
 	clusters[killIdx] = nil
 	remotes[killIdx] = nil
+	dumper.Replace(killIdx, nil)
 
 	// 等待故障检测（自适应：基础 8s + 每节点 4s）。
 	// 使用 AwaitNodeLeft 订阅 MemberLeft/Dead 事件，避免 200ms 轮询导致的延迟观测。
@@ -233,6 +234,7 @@ func TestStressClusterNodeFailure(t *testing.T) {
 	systems[killIdx], remotes[killIdx], clusters[killIdx] = createNode(
 		t, seeds[killIdx], clusterName, seeds, []string{"game"},
 	)
+	dumper.Replace(killIdx, clusters[killIdx])
 	recorders[killIdx] = NewMembershipRecorder(systems[killIdx], labels[killIdx])
 
 	// 事件驱动等待重新加入（自适应超时）

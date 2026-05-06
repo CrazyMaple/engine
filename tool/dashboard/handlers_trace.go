@@ -5,8 +5,8 @@ import (
 	"sort"
 	"time"
 
-	"engine/log"
 	"gamelib/middleware"
+	"tool/logstore"
 )
 
 // 追踪查询 API（增强版）：
@@ -15,7 +15,7 @@ import (
 //
 // 数据来源：
 //   - middleware.InMemorySpanExporter 采集的 Span（通过 Config.SpanExporter 注入）
-//   - 可选的 log.RingBufferSink（通过 Config.LogRingBuffer 注入）用于关联日志
+//   - 可选的 logstore.RingBufferSink（通过 Config.LogRingBuffer 注入）用于关联日志
 
 type traceChainSpan struct {
 	SpanID        string                 `json:"span_id"`
@@ -110,7 +110,7 @@ func (h *handlers) handleTraceChain(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if h.config.LogRingBuffer != nil {
-		logs := h.config.LogRingBuffer.Query(log.QueryFilter{TraceID: traceID})
+		logs := h.config.LogRingBuffer.Query(logstore.QueryFilter{TraceID: traceID})
 		resp.Logs = make([]traceChainLog, 0, len(logs))
 		for _, e := range logs {
 			resp.Logs = append(resp.Logs, traceChainLog{

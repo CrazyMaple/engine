@@ -178,6 +178,10 @@ type CheckpointDumper struct {
 
 // StartCheckpointDumper 启动一个 goroutine 每 interval 记录一次所有节点的成员视图
 // 返回值需在测试结束前调用 Stop。
+//
+// 注意：dumper 在内部持有 clusters 的副本以避免与调用方共享 backing array
+// 引发 data race（如测试 kill / restart 节点时改写 clusters[i]）。调用方
+// 重启或停掉某个节点时应使用 Replace(i, c) 同步更新 dumper 的视角。
 func StartCheckpointDumper(clusters []*cluster.Cluster, labels []string, interval time.Duration) *CheckpointDumper {
 	if interval <= 0 {
 		interval = 1 * time.Second
@@ -185,8 +189,8 @@ func StartCheckpointDumper(clusters []*cluster.Cluster, labels []string, interva
 	d := &CheckpointDumper{
 		stopCh:   make(chan struct{}),
 		started:  time.Now(),
-		clusters: clusters,
-		labels:   labels,
+		clusters: append([]*cluster.Cluster(nil), clusters...),
+		labels:   append([]string(nil), labels...),
 	}
 	d.wg.Add(1)
 	go func() {
@@ -203,6 +207,18 @@ func StartCheckpointDumper(clusters []*cluster.Cluster, labels []string, interva
 		}
 	}()
 	return d
+}
+
+// Replace 更新第 i 个槽位指向的 cluster；nil 表示该节点已停掉。
+// 测试在 kill / restart 节点后必须调用本方法，以保持 dumper 视角与
+// 测试本地切片一致；直接改写传入 dumper 的切片是 data race。
+func (d *CheckpointDumper) Replace(i int, c *cluster.Cluster) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if i < 0 || i >= len(d.clusters) {
+		return
+	}
+	d.clusters[i] = c
 }
 
 func (d *CheckpointDumper) capture() {

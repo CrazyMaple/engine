@@ -10,6 +10,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"engine/log"
+	"tool/logstore"
 )
 
 // logWSUpgrader 复用全局配置，允许跨域（Dashboard 内网部署）
@@ -36,15 +37,15 @@ type logWSPayload struct {
 // 连接关闭由 read goroutine 发现对端断开后触发，写循环通过 close(closeCh) 退出。
 type logWSSubscriber struct {
 	conn    *websocket.Conn
-	sendCh  chan log.LogEntry
+	sendCh  chan logstore.LogEntry
 	closeCh chan struct{}
 	once    sync.Once
-	filter  log.QueryFilter
+	filter  logstore.QueryFilter
 	dropped uint64
 }
 
-// Notify 符合 log.LogSubscriber 接口：非阻塞推送到 sendCh，满则丢弃
-func (s *logWSSubscriber) Notify(entry log.LogEntry) {
+// Notify 符合 logstore.LogSubscriber 接口：非阻塞推送到 sendCh，满则丢弃
+func (s *logWSSubscriber) Notify(entry logstore.LogEntry) {
 	if !matchWSFilter(entry, s.filter) {
 		return
 	}
@@ -83,7 +84,7 @@ func (h *handlers) handleLogWS(w http.ResponseWriter, r *http.Request) {
 
 	// 解析过滤条件（与 handleLogQuery 保持一致）
 	q := r.URL.Query()
-	filter := log.QueryFilter{
+	filter := logstore.QueryFilter{
 		TraceID:   q.Get("trace_id"),
 		Actor:     q.Get("actor"),
 		NodeID:    q.Get("node"),
@@ -97,7 +98,7 @@ func (h *handlers) handleLogWS(w http.ResponseWriter, r *http.Request) {
 
 	sub := &logWSSubscriber{
 		conn:    conn,
-		sendCh:  make(chan log.LogEntry, 64),
+		sendCh:  make(chan logstore.LogEntry, 64),
 		closeCh: make(chan struct{}),
 		filter:  filter,
 	}
@@ -150,7 +151,7 @@ func writeLogWSLoop(sub *logWSSubscriber) {
 // matchWSFilter 应用订阅者过滤条件
 //
 // 复用 /api/log/query 的 QueryFilter 语义，但时间下限/上限 / Limit 字段对实时流无意义
-func matchWSFilter(e log.LogEntry, f log.QueryFilter) bool {
+func matchWSFilter(e logstore.LogEntry, f logstore.QueryFilter) bool {
 	if f.TraceID != "" && e.TraceID != f.TraceID {
 		return false
 	}

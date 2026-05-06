@@ -13,6 +13,33 @@ type Mailbox interface {
 	Start()
 }
 
+// 以下为 Mailbox 的可选扩展接口（v1.13 契约化，外迁到 gamelib 的高级 mailbox 按需选择实现）。
+// engine 在 spawn 路径用接口断言判断 mailbox 是否实现某能力，从而避免对私有类型的硬编码断言。
+
+// SchedulerAware 邮箱可接收调度器注入。defaultMailbox / backpressureMailbox 等内置实现都实现该接口。
+type SchedulerAware interface {
+	SetScheduler(Dispatcher)
+}
+
+// OwnerAware 邮箱可接收所属 Actor PID 注入（用于背压等需要 PID 标识的事件发布）。
+type OwnerAware interface {
+	SetOwnerPID(*PID)
+}
+
+// EventStreamAware 邮箱可接收事件流注入（用于发布背压溢出等可观测事件）。
+type EventStreamAware interface {
+	SetEventStream(*EventStream)
+}
+
+// BatchAwareMailbox 邮箱可接收批处理回调注册。
+//
+// 注：actor 侧契约仍为 BatchActor.BatchReceive(ctx Context, []interface{})；
+// Mailbox 不直接持有 actor 接口，二者通过 RegisterBatchHandler 传入的闭包桥接，
+// 该闭包在 spawn 时由 engine 注入，闭包内会回调 actor.BatchReceive(ctx, msgs)。
+type BatchAwareMailbox interface {
+	RegisterBatchHandler(func([]interface{}))
+}
+
 // defaultMailbox 默认邮箱实现
 type defaultMailbox struct {
 	userMailbox   *internal.Queue

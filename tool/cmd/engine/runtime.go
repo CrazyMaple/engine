@@ -10,11 +10,12 @@ import (
 
 	"engine/actor"
 	"engine/cluster"
-	"gamelib/config"
-	"tool/dashboard"
-	"gamelib/gate"
 	"engine/log"
 	"engine/remote"
+	"gamelib/config"
+	"gamelib/gate"
+	"tool/dashboard"
+	"tool/logstore"
 )
 
 // defaultLogRingCapacity 默认日志环形缓冲容量（Dashboard /api/log/query 使用）
@@ -42,8 +43,8 @@ type engineRuntime struct {
 	dashboard *dashboard.Dashboard
 
 	// 日志管道（Dashboard 需要读取这两个 sink 才能提供 /api/log/query 和 /ws/log）
-	logRing      *log.RingBufferSink
-	logBroadcast *log.BroadcastSink
+	logRing      *logstore.RingBufferSink
+	logBroadcast *logstore.BroadcastSink
 	logFile      io.Closer
 }
 
@@ -213,42 +214,42 @@ func (r *engineRuntime) applyLog(cfg *config.EngineConfig) error {
 
 	// 可观测 sink（复用，保持已订阅的 WebSocket 客户端不断开）
 	if r.logRing == nil {
-		r.logRing = log.NewRingBufferSink(defaultLogRingCapacity)
+		r.logRing = logstore.NewRingBufferSink(defaultLogRingCapacity)
 	}
 	if r.logBroadcast == nil {
-		r.logBroadcast = log.NewBroadcastSink()
+		r.logBroadcast = logstore.NewBroadcastSink()
 	}
 
 	// 输出 sink（根据 format / path 重建）
-	var outSink log.LogSink
+	var outSink logstore.LogSink
 	var closer io.Closer
 	switch cfg.Log.Format {
 	case "json":
 		if cfg.Log.Path != "" {
-			fs, err := log.NewFileLogSink(cfg.Log.Path)
+			fs, err := logstore.NewFileLogSink(cfg.Log.Path)
 			if err != nil {
 				return err
 			}
 			outSink = fs
 			closer = fs
 		} else {
-			outSink = log.NewWriterSink(os.Stdout)
+			outSink = logstore.NewWriterSink(os.Stdout)
 		}
 	default:
 		if cfg.Log.Path != "" {
-			ts, err := log.NewTextFileSink(cfg.Log.Path)
+			ts, err := logstore.NewTextFileSink(cfg.Log.Path)
 			if err != nil {
 				return err
 			}
 			outSink = ts
 			closer = ts
 		} else {
-			outSink = log.NewTextLogSink(os.Stdout)
+			outSink = logstore.NewTextLogSink(os.Stdout)
 		}
 	}
 
-	multi := log.NewMultiSink(outSink, r.logRing, r.logBroadcast)
-	log.SetLogger(log.NewContextLogger(cfg.NodeID, multi))
+	multi := logstore.NewMultiSink(outSink, r.logRing, r.logBroadcast)
+	log.SetLogger(logstore.NewContextLogger(cfg.NodeID, multi))
 
 	// 替换日志文件句柄，旧的关闭
 	if r.logFile != nil {

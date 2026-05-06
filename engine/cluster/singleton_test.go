@@ -38,14 +38,7 @@ func newSingletonTestCluster(addr string, kinds []string) *Cluster {
 	}
 	c.config.Kinds = kinds
 	c.memberList = NewMemberList(c)
-	// 将自己加入成员列表
-	c.memberList.UpdateMember(&MemberGossipState{
-		Address: self.Address,
-		Id:      self.Id,
-		Kinds:   self.Kinds,
-		Status:  MemberAlive,
-		Seq:     self.Seq,
-	})
+	c.memberList.UpdateMember(self.Clone())
 	c.updateHashRing()
 	return c
 }

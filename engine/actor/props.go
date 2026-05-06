@@ -80,18 +80,6 @@ func (props *Props) WithBackpressureMailbox(capacity int, config BackpressureCon
 	return props
 }
 
-// WithBatchMailbox 创建批处理邮箱
-// 累积 batchSize 条消息或等待 batchTimeout 后批量投递给 BatchActor.BatchReceive
-func (props *Props) WithBatchMailbox(batchSize int, batchTimeout time.Duration) *Props {
-	props.mailbox = func() Mailbox {
-		return NewBatchMailbox(BatchMailboxConfig{
-			BatchSize:    batchSize,
-			BatchTimeout: batchTimeout,
-		})
-	}
-	return props
-}
-
 // WithStashCapacity 设置消息暂存栈容量
 func (props *Props) WithStashCapacity(capacity int) *Props {
 	props.stashCapacity = capacity
@@ -130,39 +118,23 @@ func (props *Props) spawn(id string, parent *PID) (*PID, error) {
 	cell.mailbox = props.mailbox()
 	cell.mailbox.RegisterHandlers(cell.invokeUserMessage, cell.invokeSystemMessage)
 
-	if mb, ok := cell.mailbox.(*defaultMailbox); ok {
-		mb.SetScheduler(props.dispatcher)
+	// 通过可选扩展接口注入调度器 / Owner PID / EventStream / 批处理回调；
+	// 外迁到 gamelib/actor/mailbox 的高级邮箱按需实现这些接口。
+	if sa, ok := cell.mailbox.(SchedulerAware); ok {
+		sa.SetScheduler(props.dispatcher)
 	}
-	if mb, ok := cell.mailbox.(*backpressureMailbox); ok {
-		mb.SetScheduler(props.dispatcher)
-		mb.SetOwnerPID(pid)
-		if props.eventStream != nil {
-			mb.SetEventStream(props.eventStream)
-		}
+	if oa, ok := cell.mailbox.(OwnerAware); ok {
+		oa.SetOwnerPID(pid)
 	}
-	if mb, ok := cell.mailbox.(*boundedMailbox); ok {
-		mb.SetScheduler(props.dispatcher)
+	if ea, ok := cell.mailbox.(EventStreamAware); ok && props.eventStream != nil {
+		ea.SetEventStream(props.eventStream)
 	}
-	if mb, ok := cell.mailbox.(*batchMailbox); ok {
-		mb.SetScheduler(props.dispatcher)
+	if bm, ok := cell.mailbox.(BatchAwareMailbox); ok {
 		if ba, ok := actor.(BatchActor); ok {
-			mb.RegisterBatchHandler(func(msgs []interface{}) {
+			bm.RegisterBatchHandler(func(msgs []interface{}) {
 				ba.BatchReceive(cell, msgs)
 			})
 		}
-	}
-	if mb, ok := cell.mailbox.(*priorityMailbox); ok {
-		mb.SetScheduler(props.dispatcher)
-		mb.SetOwnerPID(pid)
-		if props.eventStream != nil {
-			mb.SetEventStream(props.eventStream)
-		}
-	}
-	if mb, ok := cell.mailbox.(*ringBufferMailbox); ok {
-		mb.SetScheduler(props.dispatcher)
-	}
-	if mb, ok := cell.mailbox.(*adaptiveMailbox); ok {
-		mb.SetScheduler(props.dispatcher)
 	}
 
 	pid.p = cell

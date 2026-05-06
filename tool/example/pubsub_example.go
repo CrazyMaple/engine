@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"engine/actor"
-	"engine/pubsub"
+	"gamelib/pubsub"
 )
 
 // --- PubSub 发布订阅示例 ---

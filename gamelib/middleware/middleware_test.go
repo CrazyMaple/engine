@@ -3,6 +3,7 @@ package middleware
 import (
 	"bytes"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -19,18 +20,23 @@ func (a *testActor) Receive(ctx actor.Context) {
 }
 
 func TestChain(t *testing.T) {
+	var mu sync.Mutex
 	order := make([]int, 0)
 
 	mw1 := func(next actor.Actor) actor.Actor {
 		return actor.ActorFunc(func(ctx actor.Context) {
+			mu.Lock()
 			order = append(order, 1)
+			mu.Unlock()
 			next.Receive(ctx)
 		})
 	}
 
 	mw2 := func(next actor.Actor) actor.Actor {
 		return actor.ActorFunc(func(ctx actor.Context) {
+			mu.Lock()
 			order = append(order, 2)
+			mu.Unlock()
 			next.Receive(ctx)
 		})
 	}
@@ -47,9 +53,13 @@ func TestChain(t *testing.T) {
 	system.Root.Send(pid, "hello")
 	time.Sleep(50 * time.Millisecond)
 
+	mu.Lock()
+	snap := append([]int(nil), order...)
+	mu.Unlock()
+
 	// mw1 应该先执行（最外层），然后 mw2
-	if len(order) < 2 || order[0] != 1 || order[1] != 2 {
-		t.Errorf("expected chain order [1,2], got %v", order)
+	if len(snap) < 2 || snap[0] != 1 || snap[1] != 2 {
+		t.Errorf("expected chain order [1,2], got %v", snap)
 	}
 }
 

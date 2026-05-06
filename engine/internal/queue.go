@@ -36,15 +36,20 @@ func (q *Queue) Push(val interface{}) {
 }
 
 // Pop 出队（单消费者）
+//
+// q.tail 用 atomic 读写：MPSC 协议虽限定单消费者，但 mailbox 调度协议在 status
+// 从 running 切回 idle 后仍会调用 Empty() 决定是否重新 schedule，可能与新一轮
+// run 在另一 goroutine 上的 Pop 并发。用 atomic 同步 q.tail 的读写，避免被 race
+// detector 标记为 data race。
 func (q *Queue) Pop() interface{} {
-	tail := (*node)(q.tail)
+	tail := (*node)(atomic.LoadPointer(&q.tail))
 	next := (*node)(atomic.LoadPointer(&tail.next))
 
 	if next == nil {
 		return nil
 	}
 
-	q.tail = unsafe.Pointer(next)
+	atomic.StorePointer(&q.tail, unsafe.Pointer(next))
 	val := next.val
 	next.val = nil
 	return val
@@ -52,7 +57,7 @@ func (q *Queue) Pop() interface{} {
 
 // Empty 检查队列是否为空
 func (q *Queue) Empty() bool {
-	tail := (*node)(q.tail)
+	tail := (*node)(atomic.LoadPointer(&q.tail))
 	next := (*node)(atomic.LoadPointer(&tail.next))
 	return next == nil
 }

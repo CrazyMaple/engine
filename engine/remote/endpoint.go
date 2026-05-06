@@ -23,7 +23,7 @@ type Endpoint struct {
 	stopChan      chan struct{}
 	connected     bool
 	mu            sync.RWMutex
-	signer        *MessageSigner     // 可选的消息签名器
+	signer        MessageSigner      // 可选的消息签名器
 	tlsCfg        *network.TLSConfig // 可选的 TLS 配置
 	cipher        MessageCipher      // 可选的消息加密器
 	codec         *RemoteCodec       // 编解码器
@@ -228,7 +228,7 @@ func (ep *Endpoint) sendMessage(msg *RemoteMessage) {
 		data = encrypted
 	}
 
-	// 如果启用签名，追加 HMAC 签名（32 字节 SHA256）
+	// 如果启用签名，追加签名（长度由 signer.SignatureSize() 决定）
 	if ep.signer != nil {
 		sig := ep.signer.Sign(data)
 		data = append(data, sig...)
@@ -298,7 +298,7 @@ type EndpointManager struct {
 	system    *actor.ActorSystem
 	endpoints map[string]*Endpoint
 	mu        sync.RWMutex
-	signer    *MessageSigner     // 可选的消息签名器
+	signer    MessageSigner      // 可选的消息签名器
 	tlsCfg    *network.TLSConfig // 可选的 TLS 配置
 	cipher    MessageCipher      // 可选的消息加密器
 	codec     *RemoteCodec       // 编解码器

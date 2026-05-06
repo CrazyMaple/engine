@@ -10,6 +10,7 @@ import (
 	"engine/actor"
 	"engine/log"
 	"engine/network"
+	"gamelib/network/kcp"
 )
 
 // Gate 网关模块
@@ -37,7 +38,7 @@ type Gate struct {
 	// KCP 配置（可选；KCPAddr 为空表示不启用 KCP 接入）
 	// KCPConfig 为零值时使用 FastKCPConfig()（实时游戏场景默认）
 	KCPAddr   string
-	KCPConfig network.KCPConfig
+	KCPConfig kcp.KCPConfig
 
 	// 版本协商（nil 表示不启用握手）
 	VersionNegotiator *VersionNegotiator
@@ -47,7 +48,7 @@ type Gate struct {
 
 	tcpServer *network.TCPServer
 	wsServer  *network.WSServer
-	kcpServer *network.KCPServer
+	kcpServer *kcp.KCPServer
 	system    *actor.ActorSystem
 	connCount int64 // 当前连接数（原子操作）
 }
@@ -108,9 +109,9 @@ func (g *Gate) Start() {
 	if g.KCPAddr != "" {
 		cfg := g.KCPConfig
 		if cfg.Interval <= 0 {
-			cfg = network.FastKCPConfig()
+			cfg = kcp.FastKCPConfig()
 		}
-		g.kcpServer = &network.KCPServer{
+		g.kcpServer = &kcp.KCPServer{
 			Addr:       g.KCPAddr,
 			MaxConnNum: g.MaxConnNum,
 			Config:     cfg,
@@ -180,7 +181,7 @@ func (g *Gate) newWSAgent(conn *network.WSConn) network.Agent {
 	return agent
 }
 
-func (g *Gate) newKCPAgent(conn *network.KCPConn) network.Agent {
+func (g *Gate) newKCPAgent(conn *kcp.KCPConn) network.Agent {
 	atomic.AddInt64(&g.connCount, 1)
 	agent := &Agent{
 		conn:      conn,

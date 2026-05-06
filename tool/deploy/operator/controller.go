@@ -36,28 +36,24 @@ type ClusterMemberInfo struct {
 }
 
 // Controller EngineCluster CRD 控制器
-// 轻量实现，不依赖 controller-runtime，直接基于状态变更驱动 Reconcile
+//
+// v1.13 收缩后只保留：状态采集、事件发出、扩缩候选挑选；
+// 滚动升级与 Actor 迁移已不再由 engine/cluster 提供，调用方需通过外部
+// 协调器（gamelib 侧或上层运维系统）独立完成。
 type Controller struct {
 	mu sync.Mutex
 
-	// 当前 CRD 期望状态
 	desired *EngineCluster
-	// 节点状态表
-	nodes map[string]*NodeInfo
+	nodes   map[string]*NodeInfo
 
-	// 外部组件引用
-	cluster    *cluster.Cluster
-	upgrader   *cluster.RollingUpgradeCoordinator
-	migrator   *cluster.MigrationManager
-	scaler     *Scaler
-	source     ClusterSource
+	cluster *cluster.Cluster
+	scaler  *Scaler
+	source  ClusterSource
 
-	// 控制循环
 	reconcileInterval time.Duration
 	stopCh            chan struct{}
 	stopped           bool
 
-	// 事件回调（可选）
 	onEvent func(event ControllerEvent)
 }
 
@@ -71,8 +67,6 @@ type ControllerEvent struct {
 // ControllerConfig 控制器配置
 type ControllerConfig struct {
 	Cluster           *cluster.Cluster
-	Upgrader          *cluster.RollingUpgradeCoordinator
-	Migrator          *cluster.MigrationManager
 	Source            ClusterSource
 	ReconcileInterval time.Duration
 }
@@ -83,16 +77,13 @@ func NewController(cfg ControllerConfig) *Controller {
 	if interval == 0 {
 		interval = 10 * time.Second
 	}
-	c := &Controller{
+	return &Controller{
 		nodes:             make(map[string]*NodeInfo),
 		cluster:           cfg.Cluster,
-		upgrader:          cfg.Upgrader,
-		migrator:          cfg.Migrator,
 		source:            cfg.Source,
 		reconcileInterval: interval,
 		stopCh:            make(chan struct{}),
 	}
-	return c
 }
 
 // SetScaler 关联自动扩缩容器
@@ -115,7 +106,6 @@ func (c *Controller) Apply(ec *EngineCluster) {
 	c.desired = ec
 	c.mu.Unlock()
 
-	// 立即触发一次 Reconcile
 	c.Reconcile()
 }
 
@@ -146,16 +136,9 @@ func (c *Controller) Reconcile() {
 		return
 	}
 
-	// 1. 收集当前状态
 	c.syncNodeStates()
-
-	// 2. 检查版本升级
 	c.reconcileVersion(desired)
-
-	// 3. 检查副本数变更（扩缩容）
 	c.reconcileReplicas(desired)
-
-	// 4. 更新 CRD status
 	c.updateStatus(desired)
 }
 
@@ -218,7 +201,6 @@ func (c *Controller) syncNodeStates() {
 		node.LastSeen = time.Now()
 	}
 
-	// 移除已消失的节点
 	for addr := range c.nodes {
 		if !seen[addr] {
 			delete(c.nodes, addr)
@@ -227,6 +209,9 @@ func (c *Controller) syncNodeStates() {
 }
 
 // reconcileVersion 检查是否需要版本升级
+//
+// v1.13 起 controller 不再驱动具体的滚动升级流程；只发出事件并维护 CRD 状态字段，
+// 由上层运维系统接收事件后实际执行节点替换。
 func (c *Controller) reconcileVersion(desired *EngineCluster) {
 	c.mu.Lock()
 	currentVersion := desired.Status.CurrentVersion
@@ -237,14 +222,8 @@ func (c *Controller) reconcileVersion(desired *EngineCluster) {
 		return
 	}
 
-	// 已经在升级中，不重复触发
-	if c.upgrader != nil && c.upgrader.State() != cluster.UpgradeIdle {
-		return
-	}
-
 	log.Info("operator: version change detected %s -> %s", currentVersion, targetVersion)
 
-	// 收集需要升级的节点地址
 	c.mu.Lock()
 	nodes := make([]string, 0, len(c.nodes))
 	for addr, info := range c.nodes {
@@ -256,7 +235,6 @@ func (c *Controller) reconcileVersion(desired *EngineCluster) {
 	c.mu.Unlock()
 
 	if len(nodes) == 0 {
-		// 所有节点已是目标版本
 		c.mu.Lock()
 		desired.Status.CurrentVersion = targetVersion
 		desired.Status.Phase = PhaseRunning
@@ -265,7 +243,6 @@ func (c *Controller) reconcileVersion(desired *EngineCluster) {
 		return
 	}
 
-	// 设置升级状态
 	c.mu.Lock()
 	desired.Status.Phase = PhaseUpgrading
 	desired.Status.TargetVersion = targetVersion
@@ -273,39 +250,17 @@ func (c *Controller) reconcileVersion(desired *EngineCluster) {
 
 	c.emitEvent("UpgradeStart", fmt.Sprintf("rolling upgrade to %s, %d nodes", targetVersion, len(nodes)))
 
-	if c.upgrader == nil {
-		// 无升级协调器，直接标记完成（仅状态管理）
-		c.mu.Lock()
-		desired.Status.CurrentVersion = targetVersion
-		desired.Status.Phase = PhaseRunning
-		desired.Status.TargetVersion = ""
-		c.mu.Unlock()
-		c.emitEvent("UpgradeComplete", fmt.Sprintf("upgraded to %s (no coordinator)", targetVersion))
-		return
-	}
-
-	// 如果配置了迁移，升级前先排空 Actor
-	if strategy.MigrateActors && c.migrator != nil {
+	if strategy.MigrateActors {
 		c.emitEvent("MigrationTriggered", "migrating actors before upgrade")
 	}
 
-	// 委托 RollingUpgradeCoordinator 执行滚动升级
-	if err := c.upgrader.StartRollingUpgrade(targetVersion, nodes); err != nil {
-		log.Error("operator: failed to start rolling upgrade: %v", err)
-		c.mu.Lock()
-		desired.Status.Phase = PhaseFailed
-		desired.Status.Conditions = append(desired.Status.Conditions, ClusterCondition{
-			Type:    "UpgradeFailed",
-			Status:  "True",
-			Reason:  "RollingUpgradeError",
-			Message: err.Error(),
-			Updated: time.Now(),
-		})
-		c.mu.Unlock()
-		return
-	}
-
-	c.emitEvent("UpgradeComplete", fmt.Sprintf("rolling upgrade to %s initiated", targetVersion))
+	// 没有内置协调器：标记完成；具体的节点替换由外部驱动
+	c.mu.Lock()
+	desired.Status.CurrentVersion = targetVersion
+	desired.Status.Phase = PhaseRunning
+	desired.Status.TargetVersion = ""
+	c.mu.Unlock()
+	c.emitEvent("UpgradeComplete", fmt.Sprintf("upgraded to %s (no coordinator)", targetVersion))
 }
 
 // reconcileReplicas 检查是否需要扩缩容
@@ -320,7 +275,6 @@ func (c *Controller) reconcileReplicas(desired *EngineCluster) {
 	}
 
 	if currentCount < desiredCount {
-		// 扩容——Operator 不直接创建 Pod，通知外部扩容
 		c.mu.Lock()
 		desired.Status.Phase = PhaseScaling
 		c.mu.Unlock()
@@ -328,26 +282,17 @@ func (c *Controller) reconcileReplicas(desired *EngineCluster) {
 		return
 	}
 
-	// 缩容——需要先迁移 Actor，再移除节点
 	c.mu.Lock()
 	desired.Status.Phase = PhaseScaling
+	migrate := desired.Spec.UpgradeStrategy.MigrateActors
 	c.mu.Unlock()
 
-	// 选择要移除的节点（优先移除连接数/Actor 数最少的）
 	removeCount := currentCount - desiredCount
 	candidates := c.selectScaleDownCandidates(removeCount)
 
-	for _, addr := range candidates {
-		// 缩容前迁移 Actor（与 migration.go 联动）
-		if desired.Spec.UpgradeStrategy.MigrateActors && c.migrator != nil {
+	if migrate {
+		for _, addr := range candidates {
 			c.emitEvent("MigrationTriggered", fmt.Sprintf("migrating actors from %s before scale-down", addr))
-		}
-
-		// 排空节点
-		if c.upgrader != nil {
-			if err := c.upgrader.DrainNode(addr); err != nil {
-				log.Error("operator: failed to drain node %s: %v", addr, err)
-			}
 		}
 	}
 
@@ -366,14 +311,12 @@ func (c *Controller) selectScaleDownCandidates(count int) []string {
 
 	scores := make([]nodeScore, 0, len(c.nodes))
 	for addr, info := range c.nodes {
-		// 分数越低越优先被移除
 		scores = append(scores, nodeScore{
 			addr:  addr,
 			score: info.Connections + int64(info.ActorCount),
 		})
 	}
 
-	// 简单排序（数量小，无需优化）
 	for i := 0; i < len(scores); i++ {
 		for j := i + 1; j < len(scores); j++ {
 			if scores[j].score < scores[i].score {
@@ -402,21 +345,11 @@ func (c *Controller) updateStatus(desired *EngineCluster) {
 	}
 	desired.Status.ReadyReplicas = readyCount
 
-	// 如果所有节点就绪且不在特殊状态，设为 Running
 	if desired.Status.Phase != PhaseUpgrading && desired.Status.Phase != PhaseFailed {
 		if readyCount >= desired.Spec.Replicas {
 			desired.Status.Phase = PhaseRunning
 		} else if readyCount == 0 {
 			desired.Status.Phase = PhasePending
-		}
-	}
-
-	// 检查升级是否完成
-	if desired.Status.Phase == PhaseUpgrading && c.upgrader != nil {
-		if c.upgrader.State() == cluster.UpgradeCompleted || c.upgrader.State() == cluster.UpgradeIdle {
-			desired.Status.Phase = PhaseRunning
-			desired.Status.CurrentVersion = desired.Spec.Version
-			desired.Status.TargetVersion = ""
 		}
 	}
 }

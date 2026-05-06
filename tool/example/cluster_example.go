@@ -13,9 +13,9 @@ import (
 	"engine/cluster"
 	"engine/grain"
 	"engine/log"
-	"engine/pubsub"
+	"gamelib/pubsub"
 	"engine/remote"
-	"engine/router"
+	"gamelib/router"
 )
 
 // ===== 示例 1：Router 路由器 =====
